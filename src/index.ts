@@ -573,8 +573,21 @@ export default function subagents(pi: ExtensionAPI) {
   };
 
   pi.registerCommand("subagents", {
-    description: "Browse this session's subagent runs and view their conversations (/subagents [id])",
+    description: "Browse this session's subagent runs and view their conversations (/subagents [id], /subagents stop [id|all])",
     handler: async (args, ctx) => {
+      const [verb, target] = args.trim().split(/\s+/u);
+      if (verb === "stop") {
+        const running = [...runs.values()].filter((r) => r.child && r.state.status === "running");
+        const chosen = target === "all" || (!target && running.length === 1) ? running : target ? running.filter((r) => r.id.startsWith(target)) : [];
+        if (!chosen.length) {
+          const which = running.map((r) => `${r.id} ${r.agent}`).join(", ");
+          ctx.ui.notify(!running.length ? "No subagents are running." : target ? `No running run matches "${target}". Running: ${which}.` : `Say which: /subagents stop <id> or all. Running: ${which}.`, "info");
+          return;
+        }
+        for (const r of chosen) r.child?.stop();
+        ctx.ui.notify(`Stopping ${chosen.map((r) => `${r.agent} (${r.id})`).join(", ")}.`, "info");
+        return;
+      }
       const label = (r: RunView) => `${r.id}  ${r.status.padEnd(7)} ${r.agent} · ${r.model} · ${r.thinking}  ${clip(r.task.replace(/\s+/gu, " "), 60)}`;
       let list = allRuns(ctx);
       if (!list.length) {

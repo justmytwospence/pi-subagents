@@ -1,6 +1,7 @@
 // FleetView: a Claude Code-style list of `main` and the running subagents below the editor. ↓ or
 // ← at an empty prompt moves into it; ↑/↓ select; Enter opens the selected run's conversation
-// viewer (Esc there comes back here); Esc, or ↑ past `main`, returns to the prompt. Finished runs
+// viewer (Esc there comes back here); x twice stops the selected run; Esc, or ↑ past `main`,
+// returns to the prompt. Finished runs
 // stay a few seconds, and a run whose viewer is open stays until it closes.
 // Keys go through `onTerminalInput`, which sees them before the editor and can consume them, so
 // nothing changes for normal typing: only arrows at an empty prompt, with the editor focused.
@@ -33,18 +34,26 @@ export interface FleetFrame {
   /** Index into the roster; 0 is `main`. */
   selected: number;
   active: boolean;
+  /** The selected run is one `x` away from being stopped. */
+  stopArmed?: boolean;
   now: number;
   width: number;
   theme: Theme;
 }
 
-export function renderFleet({ roster, selected, active, now, width, theme }: FleetFrame): string[] {
+export function renderFleet({ roster, selected, active, stopArmed, now, width, theme }: FleetFrame): string[] {
   const rows = roster.slice(1).flatMap((e) => (e.kind === "run" ? [e.run] : []));
   if (!rows.length) return [];
   const sel = Math.min(selected, rows.length);
   const bullet = (i: number) => (i === sel ? theme.fg("accent", "●") : theme.fg("dim", "○"));
-  const hint = active ? "↑↓ select · enter view · esc back" : "↓ or ← for subagents";
-  const lines = [truncateToWidth(`  ${theme.fg("dim", hint)}`, width), "", truncateToWidth(`  ${bullet(0)} ${sel === 0 ? theme.fg("text", "main") : "main"}`, width)];
+  const chosen = rows[sel - 1];
+  const stoppable = chosen?.state.status === "running";
+  const hint = !active
+    ? theme.fg("dim", "↓ or ← for subagents")
+    : stopArmed && stoppable
+      ? theme.fg("error", `x again to stop ${chosen.agent}`)
+      : theme.fg("dim", `↑↓ select · enter view${stoppable ? " · x stop" : ""} · esc back`);
+  const lines = [truncateToWidth(`  ${hint}`, width), "", truncateToWidth(`  ${bullet(0)} ${sel === 0 ? theme.fg("text", "main") : "main"}`, width)];
   const visible = Math.min(MAX_ROWS, rows.length);
   const selRow = Math.max(0, sel - 1);
   const start = selRow < visible ? 0 : selRow - visible + 1;
@@ -91,6 +100,7 @@ export class FleetView {
   private active = false;
   private selected = 0;
   private viewing: string | undefined;
+  private stopArmed = false;
   private closeViewer: (() => void) | undefined;
 
   constructor(private readonly source: FleetSource) {}
@@ -136,7 +146,7 @@ export class FleetView {
       (tui, factoryTheme: Theme) => {
         this.tui = tui;
         return {
-          render: (width: number) => renderFleet({ roster: this.roster(), selected: this.selected, active: this.active, now: Date.now(), width, theme: ui.theme ?? factoryTheme }),
+          render: (width: number) => renderFleet({ roster: this.roster(), selected: this.selected, active: this.active, stopArmed: this.stopArmed, now: Date.now(), width, theme: ui.theme ?? factoryTheme }),
           invalidate: () => undefined,
         };
       },
@@ -165,7 +175,14 @@ export class FleetView {
       }
       return undefined;
     }
-    if (matchesKey(data, "down")) {
+    const entry = roster[this.selected];
+    const armed = this.stopArmed;
+    this.stopArmed = false;
+    if (matchesKey(data, "x") && entry?.kind === "run" && entry.run.state.status === "running") {
+      // Two presses, so a stray x cannot kill a run.
+      if (armed) this.source.actions(entry.run).stop?.();
+      else this.stopArmed = true;
+    } else if (matchesKey(data, "down")) {
       this.selected = Math.min(roster.length - 1, this.selected + 1);
     } else if (matchesKey(data, "up")) {
       if (this.selected === 0) this.active = false;
@@ -195,6 +212,7 @@ export class FleetView {
 
   private deactivate() {
     this.active = false;
+    this.stopArmed = false;
     this.selected = 0;
     this.update();
   }

@@ -50,10 +50,11 @@ function setup() {
   const runs = [fakeRun({ agent: "scout", child: {} as never, state: { startedAt: Date.now() } }), fakeRun({ agent: "worker", child: {} as never, state: { startedAt: Date.now() + 1 } })];
   let enabled = true;
   const steered: string[] = [];
-  const fleet = new FleetView({ runs: () => runs, enabled: () => enabled, actions: () => ({ steer: (m) => steered.push(m) > 0 }) });
+  const stopped: string[] = [];
+  const fleet = new FleetView({ runs: () => runs, enabled: () => enabled, actions: (run) => ({ steer: (m) => steered.push(m) > 0, stop: () => void stopped.push(run.agent) }) });
   fleet.setUI(ui);
   fleet.update();
-  return { ui, runs, fleet, steered, disable: () => (enabled = false) };
+  return { ui, runs, fleet, steered, stopped, disable: () => (enabled = false) };
 }
 
 test("↓ at an empty prompt enters the list; arrows select; Esc or ↑ past main leaves", () => {
@@ -120,6 +121,23 @@ test("Enter opens the viewer, which owns the keys; closing it returns to the sam
   expect(steered).toEqual(["hi"]);
   fleet.dispose();
   expect(ui.customs).toHaveLength(0);
+});
+
+test("x twice stops the selected run; any other key disarms; x on main goes to the editor", () => {
+  const { ui, fleet, stopped } = setup();
+  ui.press(KEY.down);
+  expect(ui.render("subagents-fleet")[0]).toContain("enter view · x stop · esc back");
+  expect(ui.press("x")).toBe(true);
+  expect(ui.render("subagents-fleet")[0]).toContain("x again to stop scout");
+  expect(ui.press(KEY.down)).toBe(true);
+  expect(ui.press("x")).toBe(true);
+  expect(stopped).toEqual([]);
+  expect(ui.press("x")).toBe(true);
+  expect(stopped).toEqual(["worker"]);
+  ui.press(KEY.up);
+  ui.press(KEY.up);
+  expect(ui.press("x")).toBe(false);
+  fleet.dispose();
 });
 
 test("finished runs linger, then the list hides; disabled, it never shows", () => {

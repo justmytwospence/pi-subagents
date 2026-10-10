@@ -50,6 +50,9 @@ test("the UI binds in the TUI only; /subagents lists recorded runs and opens one
   expect(ui.customs).toHaveLength(1);
   ui.customs[0]?.component.handleInput("q");
 
+  await command.handler("stop", ctx);
+  expect(ui.notes.at(-1)).toBe("No subagents are running.");
+
   await h.emit("session_shutdown", { type: "session_shutdown" }, ctx);
   expect(ui.inputHandlers.size).toBe(0);
 });
