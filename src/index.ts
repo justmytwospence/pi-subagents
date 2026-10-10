@@ -17,6 +17,7 @@ import { type JevConfig, askJev } from "./jev.ts";
 import { DEFAULT_TIER_DESCRIPTIONS, type Given, type Resolved, type Tier, pickQuestions, readPicks, resolve } from "./pick.ts";
 import { type Run, displayTokens, transcriptPath } from "./run.ts";
 import { clip, recentTexts } from "./transcript.ts";
+import { FleetView } from "./ui/fleet.ts";
 import { type ViewerActions, openViewer } from "./ui/viewer.ts";
 import { RunsWidget, WIDGET_MODES, type WidgetMode } from "./ui/widget.ts";
 
@@ -29,6 +30,8 @@ export interface SubagentsConfig extends Record<string, unknown> {
   concurrency: number;
   /** Which runs the widget above the editor shows: async ones (default), all, or none. */
   widget: WidgetMode;
+  /** The list of subagents below the editor that ↓ at an empty prompt moves into. */
+  fleetView: boolean;
 }
 
 export const DEFAULT_CONFIG: SubagentsConfig = {
@@ -38,6 +41,7 @@ export const DEFAULT_CONFIG: SubagentsConfig = {
   maxParallel: 8,
   concurrency: 4,
   widget: "background",
+  fleetView: true,
 };
 
 const MAX_LINES = 2_000;
@@ -187,12 +191,29 @@ export default function subagents(pi: ExtensionAPI) {
     queued: (mode) => queued.async + (mode === "all" ? queued.sync : 0),
     mode: widgetMode,
   });
+  /** Steer and stop for the viewer; only a live child takes either. */
+  const viewerActions = (run: Run, ui: Pick<ExtensionContext["ui"], "notify">): ViewerActions => ({
+    steer: (message) => run.child?.steer(message) ?? false,
+    stop: () => {
+      run.child?.stop();
+      ui.notify(`Stopping subagent ${run.agent} (${run.id}).`, "info");
+    },
+  });
+  let boundUI: ExtensionContext["ui"] | undefined;
+  const fleet = new FleetView({
+    runs: () => [...runs.values()],
+    enabled: () => config.fleetView !== false,
+    actions: (run) => viewerActions(run, boundUI ?? { notify: () => undefined }),
+  });
   const bindUI = (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
+    boundUI = ctx.ui;
     widget.setUI(ctx.ui);
+    fleet.setUI(ctx.ui);
   };
   const refreshUI = () => {
     widget.update();
+    fleet.update();
   };
 
   const findRun = (id: string | undefined) => {
@@ -329,7 +350,15 @@ export default function subagents(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", () => {
     for (const run of runs.values()) run.child?.stop();
-    widget.dispose();
+    boundUI = undefined;
+    // The UI may already be gone; each part still lets go of its timers and listeners.
+    for (const part of [widget, fleet]) {
+      try {
+        part.dispose();
+      } catch {
+        // stale UI
+      }
+    }
   });
 
   pi.registerTool({
@@ -543,14 +572,6 @@ export default function subagents(pi: ExtensionAPI) {
     ].reverse();
   };
 
-  const viewerActions = (run: Run, ctx: ExtensionContext): ViewerActions => ({
-    steer: (message) => run.child?.steer(message) ?? false,
-    stop: () => {
-      run.child?.stop();
-      ctx.ui.notify(`Stopping subagent ${run.agent} (${run.id}).`, "info");
-    },
-  });
-
   pi.registerCommand("subagents", {
     description: "Browse this session's subagent runs and view their conversations (/subagents [id])",
     handler: async (args, ctx) => {
@@ -573,7 +594,7 @@ export default function subagents(pi: ExtensionAPI) {
           return;
         }
         const run = only.run();
-        await openViewer(ctx.ui, run, viewerActions(run, ctx));
+        await openViewer(ctx.ui, run, viewerActions(run, ctx.ui));
         return;
       }
       for (;;) {
@@ -583,7 +604,7 @@ export default function subagents(pi: ExtensionAPI) {
         const entry = choice === undefined ? undefined : list[labels.indexOf(choice)];
         if (!entry) return;
         const run = entry.run();
-        await openViewer(ctx.ui, run, viewerActions(run, ctx));
+        await openViewer(ctx.ui, run, viewerActions(run, ctx.ui));
         list = allRuns(ctx);
       }
     },

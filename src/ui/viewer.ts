@@ -321,10 +321,13 @@ export interface ViewerUI {
   ): Promise<T>;
 }
 
-/** Show `run`'s conversation over the editor until the user closes it. */
-export function openViewer(ui: ViewerUI, run: Run, actions: ViewerActions = {}): Promise<void> {
+/** Show `run`'s conversation over the editor until the user closes it; `onOpen` gets a way to close it. */
+export function openViewer(ui: ViewerUI, run: Run, actions: ViewerActions = {}, onOpen?: (close: () => void) => void): Promise<void> {
   return ui.custom<void>(
-    (tui, theme, keybindings, done) => new ConversationViewer(tui, run, theme, () => done(undefined), actions, keybindings),
+    (tui, theme, keybindings, done) => {
+      onOpen?.(() => done(undefined));
+      return new ConversationViewer(tui, run, theme, () => done(undefined), actions, keybindings);
+    },
     { overlay: true, overlayOptions: { anchor: "center", width: "90%", maxHeight: `${VIEWER_HEIGHT_PCT}%` } },
   );
 }

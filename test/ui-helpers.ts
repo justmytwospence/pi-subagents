@@ -41,6 +41,8 @@ export function fakeUI(tui = fakeTui()) {
     tui,
     editorText: "",
     notes: [] as string[],
+    selects: [] as Array<{ title: string; options: string[] }>,
+    selectAnswers: [] as Array<(options: string[]) => string | undefined>,
     inputHandlers: new Set<(data: string) => { consume?: boolean; data?: string } | undefined>(),
     customs: [] as Array<{ component: any; options: any; close: () => void }>,
     theme: plain,
@@ -54,6 +56,10 @@ export function fakeUI(tui = fakeTui()) {
       return () => ui.inputHandlers.delete(handler);
     },
     getEditorText: () => ui.editorText,
+    select: async (title: string, options: string[]) => {
+      ui.selects.push({ title, options });
+      return ui.selectAnswers.shift()?.(options);
+    },
     notify: (message: string) => void ui.notes.push(message),
     custom(factory: CustomFactory, options: any): Promise<any> {
       return new Promise((resolve) => {
