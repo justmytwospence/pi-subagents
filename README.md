@@ -29,8 +29,8 @@ result, so they count in the session totals. The tool row shows each run's agent
 (marked "(Jev)" where Jev chose), status, time, turns, cost, and current activity.
 
 Dialogs a child's extensions open (for example a tool gate asking for approval) are forwarded to
-your UI, prefixed with the agent's name. Async runs report to herdr-attention-queue through
-`herdr:background` events. Run records are saved as `subagents:run` session entries.
+your UI, prefixed with the agent's name. Async runs hold `herdr:background` on pi's event bus
+while they run, which [pi-herdr](https://github.com/justmytwospence/pi-herdr) shows in herdr's sidebar. Run records are saved as `subagents:run` session entries.
 
 ## Watching subagents
 
