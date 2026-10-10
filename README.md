@@ -84,6 +84,8 @@ copied into both repos):
   moves through the subagents to it, and Enter opens pi-bg's background-tasks dialog. pi-bg draws
   no pill of its own then. With FleetView off (`"fleetView": false`) or outside the TUI, pi-bg shows
   its own.
+  pi-marimo's notebooks work the same way: FleetView ends with their pill (`1 notebook`) too, and
+  Enter on it opens the busiest notebook full screen.
 - **One list.** pi-bg's `/tasks` view lists this session's runs mixed in with its shells, tagged `agent`: Enter opens a
   run's conversation, `x` twice stops it, `x` on an ended one dismisses it.
 - **Waiting on async runs.** Each async run is outside work pi-bg's `bg_wait subagent:<id>` can
