@@ -23,14 +23,40 @@ new checkout from `worktree new subagent/<slug>-<id> --no-open`; `cwd`.
 `message`, delivered to the running child as a steering message. `status` without an id lists runs.
 
 The result is each child's final reply, cut to 2,000 lines or 50 KB, with the full text in
-`~/.pi/agent/subagents/<id>/output.md`. The children's token usage and cost are added to the tool
+`~/.pi/agent/subagents/<id>/output.md`. Each finished message of the child's conversation is
+appended to `messages.jsonl` beside it. The children's token usage and cost are added to the tool
 result, so they count in the session totals. The tool row shows each run's agent, model, effort
 (marked "(Jev)" where Jev chose), status, time, turns, cost, and current activity.
 
 Dialogs a child's extensions open (for example a tool gate asking for approval) are forwarded to
 your UI, prefixed with the agent's name. Async runs report to herdr-attention-queue through
-`herdr:background` events. Run records are saved as `subagents:run` session entries; `/subagents`
-lists them.
+`herdr:background` events. Run records are saved as `subagents:run` session entries.
+
+## Watching subagents
+
+The tool row only updates while its call is open, so an async run would otherwise go quiet until
+its result arrives. Three views follow the children while they work (in the TUI only):
+
+- **Widget** (above the editor): one row per running subagent with a spinner, the agent, its task,
+  model and effort (Jev's picks marked "(Jev)"), turns, tokens, cost and elapsed time, and its
+  current tool or text beneath. Tasks waiting for a slot show as queued. A finished run stays 8
+  seconds with a status icon (20 if it failed or was stopped), then the widget hides. By default it
+  shows async runs only, since a foreground run already renders in its tool row.
+- **FleetView** (below the editor): `main` and every running subagent, with elapsed time and
+  tokens. Press `↓` (or `←`) at an empty prompt to move into it, `↑`/`↓` to select, `Enter` to open
+  the selected run's conversation, and `Esc` (or `↑` past `main`) to return to the prompt. Finished
+  runs stay 5 seconds; a run whose conversation is open stays until you close it.
+- **Conversation viewer** (an overlay): the child's conversation as it streams, with tool calls,
+  results, live tool output, queued steering messages and current activity. It follows new output
+  until you scroll up (`↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`). `Enter` opens a composer that steers
+  the child, `x` twice stops it, and `Esc` or `q` closes the viewer. It stays open when the run
+  ends.
+
+`/subagents` lists this session's runs, live or recorded, and opens the one you pick in the viewer;
+`/subagents <id>` (or a unique prefix) opens one directly. Runs from before a `/reload` or a
+resumed session open from their `messages.jsonl`.
+
+The children stay `pi --mode rpc` processes: the views are rebuilt from their RPC event streams.
 
 ## Agents
 
@@ -76,12 +102,15 @@ On 15 tasks across six agents, Jev picked the expected agent every time, in abou
   },
   "jev": { "enabled": true, "provider": "typesafe", "model": "jev-latest", "timeoutMs": 3000 },
   "maxParallel": 8,
-  "concurrency": 4
+  "concurrency": 4,
+  "widget": "background",
+  "fleetView": true
 }
 ```
 
 A tier left out uses the parent's model. `tierDescriptions` overrides what Jev reads for each tier.
-Requires Pi 0.99 or newer for classifier models.
+`widget` is `"background"` (async runs only), `"all"`, or `"off"`; `fleetView: false` turns the
+list below the editor off. Requires Pi 0.99 or newer for classifier models.
 
 ## Development
 
@@ -89,3 +118,9 @@ Requires Pi 0.99 or newer for classifier models.
 npm run check   # typecheck and unit tests (a fake RPC child stands in for pi)
 npm run eval    # 15 tasks against live Jev through the installed Pi (needs TYPESAFE_API_KEY)
 ```
+
+## Credits
+
+The widget, FleetView and conversation viewer are adapted from
+[@tintinweb/pi-subagents](https://github.com/tintinweb/pi-subagents) by tintinweb (MIT; see
+`LICENSE`), ported to this extension's RPC children, run records and Jev picks.
