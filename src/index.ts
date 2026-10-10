@@ -262,6 +262,7 @@ export default function subagents(pi: ExtensionAPI) {
   const ownSource: ActivitySection = {
     id: "subagents",
     title: "subagents",
+    noun: "agent",
     entries: (now) => {
       const all = [...runs.values()].filter((r) => !dismissed.has(r.id));
       const running = all.filter((r) => r.state.status === "running").sort((a, b) => a.state.startedAt - b.state.startedAt);
@@ -273,6 +274,7 @@ export default function subagents(pi: ExtensionAPI) {
         status: runStatus(r),
         stats: `${r.state.status === "running" ? "" : `${r.state.status} · `}${formatElapsed(elapsedMs(r, now))} · ↓ ${formatCount(displayTokens(r.state.usage))} tokens`,
         startedAt: r.state.startedAt,
+        ...(r.state.endedAt ? { endedAt: r.state.endedAt } : {}),
       }));
     },
     open: (key, ui) => {

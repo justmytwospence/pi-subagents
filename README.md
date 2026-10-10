@@ -39,10 +39,12 @@ its result arrives. The views follow the children while they work (in the TUI on
 in Claude Code (2.1.296):
 
 - **FleetView**, Claude Code's subagent panel below the prompt: `main` and every running subagent,
-  with elapsed time and tokens. Press `↓` (or `←`) at an empty prompt to move into it, `↑`/`↓` to
-  select, `Enter` to open the selected run's conversation, `x` twice to stop it, `b` to move a
+  with elapsed time and tokens. Press `↓` at the bottom of the prompt to move into it, even with a
+  draft in it (the first `↓` moves the cursor to the end of the draft, as in Claude Code; `j` in
+  pi-vim's normal mode does the same, and `←` works at an empty prompt), `↑`/`↓` or `k`/`j` to
+  select, `Enter` or `l` to open the selected run's conversation, `x` twice to stop it, `b` to move a
   foreground run to the background (the tool call returns and the result arrives as a message,
-  like `async`), and `Esc` (or `↑` past `main`) to return to the prompt. As in Claude Code, a run
+  like `async`), and `Esc` or `h` (or `↑` past `main`) to return to the prompt. As in Claude Code, a run
   that succeeds leaves at once and a dim `/subagents to see subagents` (`/tasks ...` with pi-bg)
   shows for 30 seconds; a failed or stopped run stays until your next message (one you type: a
   message another extension sends does not count), or `x` dismisses it.
@@ -82,7 +84,7 @@ copied into both repos):
   moves through the subagents to it, and Enter opens pi-bg's background-tasks dialog. pi-bg draws
   no pill of its own then. With FleetView off (`"fleetView": false`) or outside the TUI, pi-bg shows
   its own.
-- **One dialog.** pi-bg's `/tasks` lists this session's runs under their own heading: Enter opens a
+- **One list.** pi-bg's `/tasks` view lists this session's runs mixed in with its shells, tagged `agent`: Enter opens a
   run's conversation, `x` twice stops it, `x` on an ended one dismisses it.
 - **Waiting on async runs.** Each async run is outside work pi-bg's `bg_wait subagent:<id>` can
   wait on inside the turn, so the agent shows as working (in pi, herdr and tmux) until the run

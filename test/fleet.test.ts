@@ -39,7 +39,7 @@ test("rows: the selection, stats flush right, a status icon once finished, and s
   expect(idle[4]).toBe("");
   expect(idle.slice(2, 4).map(visibleWidth)).toEqual([80, 80]);
   const active = renderFleet({ roster, selected: 2, active: true, now: 60_000, width: 80, theme: plain });
-  expect(active[0]).toContain("↑↓ select · enter view · x dismiss · esc back");
+  expect(active[0]).toContain("j/k select · l/enter view · x dismiss · h/esc back");
   expect(active[1]).toBe("  ○ main");
   expect(active[3]).toMatch(/^ {2}● reviewer/u);
   // A pill, and the note after a success.
@@ -80,7 +80,7 @@ test("↓ at an empty prompt enters the list; arrows select; Esc or ↑ past mai
   expect(ui.press(KEY.down)).toBe(false);
   ui.editorText = "";
   expect(ui.press(KEY.down)).toBe(true);
-  expect(ui.render("subagents-fleet")[0]).toContain("↑↓ select");
+  expect(ui.render("subagents-fleet")[0]).toContain("j/k select");
   expect(ui.render("subagents-fleet")[2]).toMatch(/● scout/u);
   expect(ui.press(KEY.down)).toBe(true);
   expect(ui.press(KEY.down)).toBe(true);
@@ -142,7 +142,7 @@ test("Enter opens the viewer, which owns the keys; closing it returns to the sam
 test("x twice stops the selected run; any other key disarms; x on main goes to the editor", () => {
   const { ui, fleet, stopped } = setup();
   ui.press(KEY.down);
-  expect(ui.render("subagents-fleet")[0]).toContain("enter view · x stop · esc back");
+  expect(ui.render("subagents-fleet")[0]).toContain("l/enter view · x stop · h/esc back");
   expect(ui.press("x")).toBe(true);
   expect(ui.render("subagents-fleet")[0]).toContain("x again to stop scout");
   expect(ui.press(KEY.down)).toBe(true);
@@ -229,7 +229,7 @@ test("a pill: ↓ selects it when there are no runs; Enter opens its dialog, whi
   fleet.update();
   expect(ui.render("subagents-fleet")).toEqual(["  2 shells ", ""]);
   expect(ui.press(KEY.down)).toBe(true);
-  expect(ui.render("subagents-fleet")[0]).toBe(" \x1b[7m 2 shells \x1b[27m  enter to view · esc to go back");
+  expect(ui.render("subagents-fleet")[0]).toBe(" \x1b[7m 2 shells \x1b[27m  l/enter view · h/esc back");
   expect(ui.press(KEY.enter)).toBe(true);
   await Promise.resolve();
   expect(opened).toBe(1);
@@ -238,5 +238,39 @@ test("a pill: ↓ selects it when there are no runs; Enter opens its dialog, whi
   await new Promise((r) => setTimeout(r, 0));
   expect(ui.press(KEY.down)).toBe(true);
   expect(ui.press(KEY.escape)).toBe(true);
+  fleet.dispose();
+});
+
+test("↓ leaves a draft for the list once the cursor is at its end; vim's j does in normal mode; hjkl move, open and go back", () => {
+  const { ui, fleet } = setup();
+  const editor = { text: "a draft", cursor: { line: 0, col: 3 }, mode: "insert", historyIndex: -1 };
+  ui.tui.focused = {
+    getText: () => editor.text,
+    setText: () => undefined,
+    getLines: () => editor.text.split("\n"),
+    getCursor: () => editor.cursor,
+    historyIndex: -1,
+    getMode: () => editor.mode,
+  };
+  ui.editorText = editor.text;
+  // Mid-line: the editor moves the cursor first.
+  expect(ui.press(KEY.down)).toBe(false);
+  editor.cursor = { line: 0, col: 7 };
+  expect(ui.press(KEY.down)).toBe(true);
+  expect(ui.render("subagents-fleet")[2]).toMatch(/● scout/u);
+  // h goes back; ← with a draft stays in the editor.
+  expect(ui.press("h")).toBe(true);
+  expect(ui.press(KEY.left)).toBe(false);
+  // vim: j in insert mode is typing; in normal mode at the last character it enters.
+  expect(ui.press("j")).toBe(false);
+  editor.mode = "normal";
+  editor.cursor = { line: 0, col: 6 };
+  expect(ui.press("j")).toBe(true);
+  expect(ui.press("j")).toBe(true);
+  expect(ui.render("subagents-fleet")[3]).toMatch(/● worker/u);
+  expect(ui.press("k")).toBe(true);
+  expect(ui.render("subagents-fleet")[2]).toMatch(/● scout/u);
+  expect(ui.press("l")).toBe(true);
+  expect(ui.customs).toHaveLength(1);
   fleet.dispose();
 });

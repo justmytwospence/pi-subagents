@@ -2,15 +2,16 @@
 // or stopped ones until the user's next message or `x`), then the pills other extensions offer
 // (pi-bg's `2 shells`). A run that succeeds leaves at once, and a dim `/tasks to see subagents`
 // (or `/subagents ...` without pi-bg) shows for 30 s, as in Claude Code.
-// ↓ or ← at an empty prompt moves into it; ↑/↓ select; Enter opens the selected run's
+// ↓ at the bottom of the prompt (even with a draft in it), `j` in pi-vim's normal mode there, or ←
+// at an empty prompt moves into it; ↑/↓ or k/j select; Enter or l opens the selected run's
 // conversation viewer (Esc there comes back here) or the pill's dialog; x twice stops the selected
-// run, x on an ended run dismisses it; b moves a foreground run to the background; Esc, or ↑ past
-// the first row, returns to the prompt. A run whose viewer is open stays until it closes.
+// run, x on an ended run dismisses it; b moves a foreground run to the background; Esc, h, or ↑/k
+// past the first row, returns to the prompt. A run whose viewer is open stays until it closes.
 // Keys go through `onTerminalInput`, which sees them before the editor and can consume them, so
 // nothing changes for normal typing: only arrows at an empty prompt, with the editor focused.
 // Adapted from tintinweb/pi-subagents (MIT): https://github.com/tintinweb/pi-subagents
 import { type TUI, isKeyRelease, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
-import type { ActivityPill, ActivitySection } from "../activity.ts";
+import { type ActivityPill, type ActivitySection, leavesPromptDown } from "../activity.ts";
 import type { Run } from "../run.ts";
 import { displayTokens } from "../run.ts";
 import { type Theme, elapsedMs, formatCost, formatCount, formatElapsed, rightAlign, statusIcon, taskLine } from "./format.ts";
@@ -92,10 +93,10 @@ export function renderFleet({ roster, selected, active, stopArmed, canBackground
       : stopArmed && stoppable
         ? theme.fg("error", `x again to stop ${chosen.run.agent}`)
         : chosen?.kind === "pill"
-          ? theme.fg("dim", "↑↓ select · enter view · esc back")
+          ? theme.fg("dim", "j/k select · l/enter view · h/esc back")
           : theme.fg(
               "dim",
-              `↑↓ select · enter view${stoppable ? " · x stop" : ""}${dismissable ? " · x dismiss" : ""}${stoppable && canBackground ? " · b background" : ""} · esc back`,
+              `j/k select · l/enter view${stoppable ? " · x stop" : ""}${dismissable ? " · x dismiss" : ""}${stoppable && canBackground ? " · b background" : ""} · h/esc back`,
             );
     lines.push(truncateToWidth(`  ${hint}`, width));
     lines.push(truncateToWidth(`  ${bullet(0)} ${active && sel === 0 ? theme.fg("text", "main") : "main"}`, width));
@@ -124,7 +125,7 @@ export function renderFleet({ roster, selected, active, stopArmed, canBackground
     const on = active && i === sel;
     const label = on ? inverse(` ${e.pill.label} `) : theme.fg("muted", ` ${e.pill.label} `);
     const alert = e.pill.alert ? ` ${theme.fg("dim", "·")} ${theme.fg("error", e.pill.alert)}` : "";
-    const hint = on && !runs.length ? theme.fg("dim", "  enter to view · esc to go back") : "";
+    const hint = on && !runs.length ? theme.fg("dim", "  l/enter view · h/esc back") : "";
     lines.push(truncateToWidth(` ${label}${alert}${hint}`, width));
   }
   if (note) lines.push(truncateToWidth(`  ${theme.fg("dim", note)}`, width));
@@ -264,8 +265,12 @@ export class FleetView {
       return undefined;
     }
     if (!this.active) {
-      // Only arrows at an empty prompt matter here; nothing else needs the list worked out.
-      if (!(matchesKey(data, "down") || matchesKey(data, "left")) || this.ui.getEditorText() !== "") return undefined;
+      // ↓ (or vim's j) at the bottom of the prompt, ← at an empty one; nothing else needs the list worked out.
+      const focused = this.focused();
+      // Without a view of the editor, only an empty prompt is safe to leave.
+      const down = focused ? leavesPromptDown(focused, data, matchesKey(data, "down"), data === "j") : matchesKey(data, "down") && this.ui.getEditorText() === "";
+      const left = matchesKey(data, "left") && this.ui.getEditorText() === "";
+      if (!down && !left) return undefined;
       const roster = this.roster();
       if (roster.length > 0) {
         this.active = true;
@@ -297,15 +302,15 @@ export class FleetView {
       this.select(left, Math.min(this.selected, Math.max(0, left.length - 1)));
     } else if (matchesKey(data, "b") && entry?.kind === "run" && this.source.actions(entry.run).canBackground?.()) {
       this.source.actions(entry.run).background?.();
-    } else if (matchesKey(data, "down")) {
+    } else if (matchesKey(data, "down") || matchesKey(data, "j")) {
       this.select(roster, Math.min(roster.length - 1, this.selected + 1));
-    } else if (matchesKey(data, "up")) {
+    } else if (matchesKey(data, "up") || matchesKey(data, "k")) {
       if (this.selected === 0) this.active = false;
       else this.select(roster, this.selected - 1);
-    } else if (matchesKey(data, "escape")) {
+    } else if (matchesKey(data, "escape") || matchesKey(data, "h")) {
       this.active = false;
       this.selected = 0;
-    } else if (matchesKey(data, "enter")) {
+    } else if (matchesKey(data, "enter") || matchesKey(data, "l")) {
       this.open(roster[this.selected]);
     } else {
       // Anything else goes back to the editor.
@@ -316,10 +321,14 @@ export class FleetView {
     return { consume: true };
   }
 
+  private focused(): unknown {
+    const tui = this.tui as unknown as { getFocusedComponent?: () => unknown; focusedComponent?: unknown } | undefined;
+    return typeof tui?.getFocusedComponent === "function" ? tui.getFocusedComponent() : tui?.focusedComponent;
+  }
+
   /** Pi's editor has `getText` and `setText`; its dialogs and overlays do not. Unknown focus counts as the editor. */
   private editorFocused(): boolean {
-    const tui = this.tui as unknown as { getFocusedComponent?: () => unknown; focusedComponent?: unknown } | undefined;
-    const focused = typeof tui?.getFocusedComponent === "function" ? tui.getFocusedComponent() : tui?.focusedComponent;
+    const focused = this.focused();
     if (focused == null) return true;
     const c = focused as { getText?: unknown; setText?: unknown };
     return typeof c.getText === "function" && typeof c.setText === "function";

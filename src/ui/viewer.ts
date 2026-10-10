@@ -124,7 +124,7 @@ export class ConversationViewer implements Component {
       this.tui.requestRender();
       return;
     }
-    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "q")) {
+    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "q") || matchesKey(data, "h")) {
       this.close();
       return;
     }
@@ -238,7 +238,7 @@ export class ConversationViewer implements Component {
       const position = content.length <= page ? "all" : `${Math.round(((start + page) / content.length) * 100)}%`;
       actions.push(th.fg("dim", `m ${MARKDOWN_LABELS[ConversationViewer.markdownMode]}`));
       const sep = th.fg("dim", " · ");
-      const nav = th.fg("dim", "↑↓ scroll · PgUp/PgDn · esc back");
+      const nav = th.fg("dim", "j/k scroll · PgUp/PgDn · h/esc back");
       // The line count goes first when the footer is short of room.
       const withCount = [...actions, th.fg("dim", `${content.length} lines · ${position}`)].join(sep);
       const left = visibleWidth(withCount) + visibleWidth(nav) + 1 <= inner ? withCount : actions.join(sep);
