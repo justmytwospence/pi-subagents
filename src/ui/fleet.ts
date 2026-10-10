@@ -1,16 +1,16 @@
-// FleetView: a Claude Code-style list of `main` and the running subagents below the editor. ↓ or
-// ← at an empty prompt moves into it; ↑/↓ select; Enter opens the selected run's conversation
-// viewer (Esc there comes back here); x twice stops the selected run, b moves a foreground run to
-// the background; Esc, or ↑ past `main`,
-// returns to the prompt. Finished runs
-// stay a few seconds, and a run whose viewer is open stays until it closes.
+// FleetView: Claude Code's panel below the prompt. `main` and the subagents (running, plus failed
+// or stopped ones until the user's next message or `x`), then the pills other extensions offer
+// (pi-bg's `2 shells`). A run that succeeds leaves at once, and a dim `/tasks to see subagents`
+// (or `/subagents ...` without pi-bg) shows for 30 s, as in Claude Code.
+// ↓ or ← at an empty prompt moves into it; ↑/↓ select; Enter opens the selected run's
+// conversation viewer (Esc there comes back here) or the pill's dialog; x twice stops the selected
+// run, x on an ended run dismisses it; b moves a foreground run to the background; Esc, or ↑ past
+// the first row, returns to the prompt. A run whose viewer is open stays until it closes.
 // Keys go through `onTerminalInput`, which sees them before the editor and can consume them, so
 // nothing changes for normal typing: only arrows at an empty prompt, with the editor focused.
-// Other extensions' entries (activity.ts; pi-bg's background tasks) are listed after the runs:
-// Enter opens their own detail view, x twice stops them.
 // Adapted from tintinweb/pi-subagents (MIT): https://github.com/tintinweb/pi-subagents
 import { type TUI, isKeyRelease, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
-import type { ActivityEntry, ActivitySection } from "../activity.ts";
+import type { ActivityPill, ActivitySection } from "../activity.ts";
 import type { Run } from "../run.ts";
 import { displayTokens } from "../run.ts";
 import { type Theme, elapsedMs, formatCost, formatCount, formatElapsed, rightAlign, statusIcon, taskLine } from "./format.ts";
@@ -20,90 +20,114 @@ const FLEET_KEY = "subagents-fleet";
 /** Subagent rows shown at once; the rest scroll. */
 const MAX_ROWS = 5;
 const TICK_MS = 250;
-/** How long a run that succeeded stays in the list; a failed or stopped one stays until the user's next message. */
-export const FLEET_LINGER_MS = 5_000;
+/** How long the hint after a subagent succeeds stays, as in Claude Code. */
+export const SUCCESS_HINT_MS = 30_000;
 
-export type FleetEntry = { kind: "main" } | { kind: "run"; run: Run } | { kind: "ext"; section: ActivitySection; entry: ActivityEntry };
+export type FleetEntry = { kind: "main" } | { kind: "run"; run: Run } | { kind: "pill"; section: ActivitySection; pill: ActivityPill };
 
-const entryKey = (e: FleetEntry) => (e.kind === "run" ? `run:${e.run.id}` : e.kind === "ext" ? `${e.section.id}:${e.entry.key}` : "main");
+const entryKey = (e: FleetEntry) => (e.kind === "run" ? `run:${e.run.id}` : e.kind === "pill" ? `pill:${e.section.id}` : "main");
 
-/**
- * `main`, then the runs worth listing, earliest first: running, being viewed, or just finished;
- * then each section's entries (the section decides which), earliest first.
- */
-export function fleetRoster(runs: readonly Run[], now: number, viewing?: string, sections: readonly ActivitySection[] = [], dismissedAt = Number.POSITIVE_INFINITY): FleetEntry[] {
-  const ended = (r: Run) => {
-    const at = r.state.endedAt;
-    if (at === undefined) return false;
-    return r.state.status === "done" ? now - at < FLEET_LINGER_MS : now - at < FLEET_LINGER_MS || at > dismissedAt;
-  };
-  const listed = runs
-    .filter((r) => r.state.status === "running" || `run:${r.id}` === viewing || ended(r))
-    .sort((a, b) => a.state.startedAt - b.state.startedAt);
-  const ext = sections.flatMap((section) =>
-    section
-      .entries(now)
-      .sort((a, b) => a.startedAt - b.startedAt)
-      .map((entry) => ({ kind: "ext" as const, section, entry })),
-  );
-  return [{ kind: "main" }, ...listed.map((run) => ({ kind: "run" as const, run })), ...ext];
+/** A failed or stopped run the user has not seen yet: it ended after their last message and is not dismissed. */
+export function held(run: Run, dismissedAt: number, dismissed: ReadonlySet<string>): boolean {
+  const s = run.state;
+  return s.status !== "running" && s.status !== "done" && s.endedAt !== undefined && s.endedAt > dismissedAt && !dismissed.has(run.id);
 }
 
-const extIcon = (status: ActivityEntry["status"], theme: Theme) => statusIcon(status === "stopped" ? "stopped" : status, theme);
+/**
+ * `main` and the runs worth listing (running, being viewed, or failed or stopped and unseen),
+ * earliest first, then each section's pill. Without runs there is no `main` row, only the pills.
+ */
+export function fleetRoster(
+  runs: readonly Run[],
+  now: number,
+  viewing?: string,
+  sections: readonly ActivitySection[] = [],
+  dismissedAt = Number.POSITIVE_INFINITY,
+  dismissed: ReadonlySet<string> = new Set(),
+): FleetEntry[] {
+  const listed = runs
+    .filter((r) => r.state.status === "running" || `run:${r.id}` === viewing || held(r, dismissedAt, dismissed))
+    .sort((a, b) => a.state.startedAt - b.state.startedAt);
+  const pills = sections.flatMap((section) => {
+    let pill: ActivityPill | undefined;
+    try {
+      pill = section.pill?.(now);
+    } catch {
+      // Another extension's bug must not break the list.
+    }
+    return pill ? [{ kind: "pill" as const, section, pill }] : [];
+  });
+  return [...(listed.length ? [{ kind: "main" as const }] : []), ...listed.map((run) => ({ kind: "run" as const, run })), ...pills];
+}
 
 export interface FleetFrame {
   roster: readonly FleetEntry[];
-  /** Index into the roster; 0 is `main`. */
+  /** Index into the roster. */
   selected: number;
   active: boolean;
   /** The selected run is one `x` away from being stopped. */
   stopArmed?: boolean;
   /** The selected run is in the foreground and can be moved to the background. */
   canBackground?: boolean;
+  /** A dim line under the list: `/tasks to see subagents`. */
+  note?: string;
   now: number;
   width: number;
-  theme: Theme;
+  theme: Theme & { inverse?(text: string): string };
 }
 
-export function renderFleet({ roster, selected, active, stopArmed, canBackground, now, width, theme }: FleetFrame): string[] {
-  const rows = roster.slice(1);
-  if (!rows.length) return [];
-  const sel = Math.min(selected, rows.length);
-  const bullet = (i: number) => (i === sel ? theme.fg("accent", "●") : theme.fg("dim", "○"));
-  const chosen = rows[sel - 1];
-  const stoppable = chosen?.kind === "run" ? chosen.run.state.status === "running" : chosen?.kind === "ext" ? chosen.entry.status === "running" && Boolean(chosen.section.stop) : false;
-  const chosenName = chosen?.kind === "run" ? chosen.run.agent : chosen?.kind === "ext" ? chosen.entry.label : "";
-  const kinds = [...new Set(rows.map((e) => (e.kind === "run" ? "subagents" : e.kind === "ext" ? e.section.title : "")))].filter(Boolean);
-  const hint = !active
-    ? theme.fg("dim", `↓ or ← for ${kinds.join(" and ")}`)
-    : stopArmed && stoppable
-      ? theme.fg("error", `x again to stop ${chosenName}`)
-      : theme.fg("dim", `↑↓ select · enter view${stoppable ? " · x stop" : ""}${stoppable && canBackground ? " · b background" : ""} · esc back`);
-  const lines = [truncateToWidth(`  ${hint}`, width), "", truncateToWidth(`  ${bullet(0)} ${sel === 0 ? theme.fg("text", "main") : "main"}`, width)];
-  const visible = Math.min(MAX_ROWS, rows.length);
-  const selRow = Math.max(0, sel - 1);
-  const start = selRow < visible ? 0 : selRow - visible + 1;
-  if (start > 0) lines.push(rightAlign("", theme.fg("dim", `↑ ${start} more`), width));
-  for (let i = start; i < start + visible; i++) {
-    const row = rows[i];
-    if (!row || row.kind === "main") continue;
-    const on = i + 1 === sel;
-    if (row.kind === "ext") {
-      const e = row.entry;
-      const left = `  ${bullet(i + 1)} ${on ? theme.bold(theme.fg("text", e.label)) : theme.fg("muted", e.label)}  ${on ? theme.fg("text", taskLine(e.detail, 60)) : taskLine(e.detail, 60)}`;
-      const done = e.status === "running" ? "" : `${extIcon(e.status, theme)} `;
-      lines.push(rightAlign(left, done + theme.fg(on ? "text" : "dim", e.stats), width));
-      continue;
+export function renderFleet({ roster, selected, active, stopArmed, canBackground, note, now, width, theme }: FleetFrame): string[] {
+  if (!roster.length && !note) return [];
+  const lines: string[] = [];
+  const runs = roster.flatMap((e) => (e.kind === "run" ? [e.run] : []));
+  const pills = roster.flatMap((e, i) => (e.kind === "pill" ? [{ e, i }] : []));
+  const sel = Math.min(selected, Math.max(0, roster.length - 1));
+  const chosen = active ? roster[sel] : undefined;
+  const bullet = (i: number) => (active && i === sel ? theme.fg("accent", "●") : theme.fg("dim", "○"));
+  if (runs.length) {
+    const stoppable = chosen?.kind === "run" && chosen.run.state.status === "running";
+    const dismissable = chosen?.kind === "run" && chosen.run.state.status !== "running";
+    const hint = !active
+      ? theme.fg("dim", "↓ or ← for subagents")
+      : stopArmed && stoppable
+        ? theme.fg("error", `x again to stop ${chosen.run.agent}`)
+        : chosen?.kind === "pill"
+          ? theme.fg("dim", "↑↓ select · enter view · esc back")
+          : theme.fg(
+              "dim",
+              `↑↓ select · enter view${stoppable ? " · x stop" : ""}${dismissable ? " · x dismiss" : ""}${stoppable && canBackground ? " · b background" : ""} · esc back`,
+            );
+    lines.push(truncateToWidth(`  ${hint}`, width));
+    lines.push(truncateToWidth(`  ${bullet(0)} ${active && sel === 0 ? theme.fg("text", "main") : "main"}`, width));
+    // Runs are roster rows 1..runs.length; scroll so the selected one shows.
+    const visible = Math.min(MAX_ROWS, runs.length);
+    const selRun = chosen?.kind === "run" ? sel - 1 : 0;
+    const start = selRun < visible ? 0 : selRun - visible + 1;
+    if (start > 0) lines.push(rightAlign("", theme.fg("dim", `↑ ${start} more`), width));
+    for (let i = start; i < start + visible; i++) {
+      const run = runs[i];
+      if (!run) continue;
+      const on = active && i + 1 === sel;
+      const left = `  ${bullet(i + 1)} ${on ? theme.bold(theme.fg("text", run.agent)) : theme.fg("muted", run.agent)}  ${on ? theme.fg("text", taskLine(run.task, 60)) : taskLine(run.task, 60)}`;
+      const cost = formatCost(run.state.usage.cost.total);
+      const stats = `${formatElapsed(elapsedMs(run, now))} · ↓ ${formatCount(displayTokens(run.state.usage))} tokens${cost ? ` · ${cost}` : ""}`;
+      const done = run.state.status === "running" ? "" : `${statusIcon(run.state.status, theme)} `;
+      lines.push(rightAlign(left, done + theme.fg(on ? "text" : "dim", stats), width));
     }
-    const run = row.run;
-    const left = `  ${bullet(i + 1)} ${on ? theme.bold(theme.fg("text", run.agent)) : theme.fg("muted", run.agent)}  ${on ? theme.fg("text", taskLine(run.task, 60)) : taskLine(run.task, 60)}`;
-    const cost = formatCost(run.state.usage.cost.total);
-    const stats = `${formatElapsed(elapsedMs(run, now))} · ↓ ${formatCount(displayTokens(run.state.usage))} tokens${cost ? ` · ${cost}` : ""}`;
-    const done = run.state.status === "running" ? "" : `${statusIcon(run.state.status, theme)} `;
-    lines.push(rightAlign(left, done + theme.fg(on ? "text" : "dim", stats), width));
+    const below = runs.length - (start + visible);
+    if (below > 0) lines.push(rightAlign("", theme.fg("dim", `↓ ${below} more`), width));
   }
-  const below = rows.length - (start + visible);
-  if (below > 0) lines.push(rightAlign("", theme.fg("dim", `↓ ${below} more`), width));
+  // The pills: Claude Code's background-tasks indicator, inverse while selected.
+  const inverse = (s: string) => (theme.inverse ? theme.inverse(s) : `\x1b[7m${s}\x1b[27m`);
+  for (const { e, i } of pills) {
+    if (e.kind !== "pill") continue;
+    const on = active && i === sel;
+    const label = on ? inverse(` ${e.pill.label} `) : theme.fg("muted", ` ${e.pill.label} `);
+    const alert = e.pill.alert ? ` ${theme.fg("dim", "·")} ${theme.fg("error", e.pill.alert)}` : "";
+    const hint = on && !runs.length ? theme.fg("dim", "  enter to view · esc to go back") : "";
+    lines.push(truncateToWidth(` ${label}${alert}${hint}`, width));
+  }
+  if (note) lines.push(truncateToWidth(`  ${theme.fg("dim", note)}`, width));
   // Pi puts the footer right under below-editor widgets.
   lines.push("");
   return lines;
@@ -121,10 +145,15 @@ export interface FleetSource {
   runs(): readonly Run[];
   enabled(): boolean;
   actions(run: Run): ViewerActions;
-  /** Other extensions' sections whose entries are listed after the runs (pi-bg). */
+  /** Other extensions' sources whose pills end the list (pi-bg). */
   sections?(): readonly ActivitySection[];
   /** When the user last sent a message: failed and stopped runs that ended before it leave the list. */
   dismissedAt?(): number;
+  /** Runs dismissed with `x`. */
+  dismissed?(): ReadonlySet<string>;
+  dismiss?(runId: string): void;
+  /** The dim line under the list, if any (`/tasks to see subagents` after a success). */
+  note?(now: number): string | undefined;
 }
 
 type KeyResult = { consume?: boolean; data?: string } | undefined;
@@ -137,6 +166,10 @@ export class FleetView {
   private timer: ReturnType<typeof setInterval> | undefined;
   private active = false;
   private selected = 0;
+  /** The selected row by identity, so rows coming and going do not move the selection. */
+  private selectedKey: string | undefined;
+  /** The row one `x` away from being stopped. */
+  private armedKey: string | undefined;
   private viewing: string | undefined;
   private stopArmed = false;
   private closeViewer: (() => void) | undefined;
@@ -153,13 +186,31 @@ export class FleetView {
   }
 
   private roster() {
-    return fleetRoster(this.source.runs(), Date.now(), this.viewing, this.source.sections?.() ?? [], this.source.dismissedAt?.());
+    return fleetRoster(this.source.runs(), Date.now(), this.viewing, this.source.sections?.() ?? [], this.source.dismissedAt?.(), this.source.dismissed?.());
+  }
+
+  /** The first row ↓ selects: the first run, or the first pill when there are no runs. */
+  private firstRow(roster: readonly FleetEntry[]): number {
+    return roster[0]?.kind === "main" ? 1 : 0;
+  }
+
+  /** Follows the selected row to where it is now, or clamps when it left. */
+  private reselect(roster: readonly FleetEntry[]): void {
+    const at = this.selectedKey ? roster.findIndex((e) => entryKey(e) === this.selectedKey) : -1;
+    this.selected = at >= 0 ? at : Math.min(this.selected, Math.max(0, roster.length - 1));
+    this.selectedKey = roster[this.selected] ? entryKey(roster[this.selected] as FleetEntry) : undefined;
+  }
+
+  private select(roster: readonly FleetEntry[], index: number): void {
+    this.selected = index;
+    this.selectedKey = roster[index] ? entryKey(roster[index] as FleetEntry) : undefined;
   }
 
   update(): void {
     if (!this.ui) return;
     const roster = this.roster();
-    if (!this.source.enabled() || roster.length < 2) {
+    const note = this.source.note?.(Date.now());
+    if (!this.source.enabled() || (!roster.length && !note)) {
       if (this.registered) this.ui.setWidget(FLEET_KEY, undefined);
       this.registered = false;
       this.tui = undefined;
@@ -169,7 +220,8 @@ export class FleetView {
       this.selected = 0;
       return;
     }
-    this.selected = Math.min(this.selected, roster.length - 1);
+    this.reselect(roster);
+    if (!roster.length) this.active = false;
     if (!this.timer) {
       this.timer = setInterval(() => this.update(), TICK_MS);
       this.timer.unref?.();
@@ -186,9 +238,12 @@ export class FleetView {
         return {
           render: (width: number) => {
             const roster = this.roster();
+            this.reselect(roster);
             const entry = roster[this.selected];
             const canBackground = entry?.kind === "run" && Boolean(this.source.actions(entry.run).canBackground?.());
-            return renderFleet({ roster, selected: this.selected, active: this.active, stopArmed: this.stopArmed, canBackground, now: Date.now(), width, theme: ui.theme ?? factoryTheme });
+            const now = Date.now();
+            const stopArmed = this.stopArmed && entry !== undefined && entryKey(entry) === this.armedKey;
+            return renderFleet({ roster, selected: this.selected, active: this.active, stopArmed, canBackground, note: this.source.note?.(now), now, width, theme: ui.theme ?? factoryTheme });
           },
           invalidate: () => undefined,
         };
@@ -208,33 +263,45 @@ export class FleetView {
       if (this.active) this.deactivate();
       return undefined;
     }
-    const roster = this.roster();
     if (!this.active) {
-      if ((matchesKey(data, "down") || matchesKey(data, "left")) && roster.length > 1 && this.ui.getEditorText() === "") {
+      // Only arrows at an empty prompt matter here; nothing else needs the list worked out.
+      if (!(matchesKey(data, "down") || matchesKey(data, "left")) || this.ui.getEditorText() !== "") return undefined;
+      const roster = this.roster();
+      if (roster.length > 0) {
         this.active = true;
-        this.selected = 1;
+        this.select(roster, this.firstRow(roster));
         this.update();
         return { consume: true };
       }
       return undefined;
     }
+    const roster = this.roster();
+    this.reselect(roster);
     const entry = roster[this.selected];
-    const armed = this.stopArmed;
+    // Armed only for the row that was selected when x was first pressed.
+    const armed = this.stopArmed && entry !== undefined && entryKey(entry) === this.armedKey;
     this.stopArmed = false;
+    this.armedKey = undefined;
     if (matchesKey(data, "x") && entry?.kind === "run" && entry.run.state.status === "running") {
       // Two presses, so a stray x cannot kill a run.
       if (armed) this.source.actions(entry.run).stop?.();
-      else this.stopArmed = true;
-    } else if (matchesKey(data, "x") && entry?.kind === "ext" && entry.entry.status === "running" && entry.section.stop) {
-      if (armed) entry.section.stop(entry.entry.key);
-      else this.stopArmed = true;
+      else {
+        this.stopArmed = true;
+        this.armedKey = entryKey(entry);
+      }
+    } else if (matchesKey(data, "x") && entry?.kind === "run") {
+      // An ended run: dismissed now instead of at the user's next message.
+      this.source.dismiss?.(entry.run.id);
+      const left = this.roster();
+      if (!left.length) this.active = false;
+      this.select(left, Math.min(this.selected, Math.max(0, left.length - 1)));
     } else if (matchesKey(data, "b") && entry?.kind === "run" && this.source.actions(entry.run).canBackground?.()) {
       this.source.actions(entry.run).background?.();
     } else if (matchesKey(data, "down")) {
-      this.selected = Math.min(roster.length - 1, this.selected + 1);
+      this.select(roster, Math.min(roster.length - 1, this.selected + 1));
     } else if (matchesKey(data, "up")) {
       if (this.selected === 0) this.active = false;
-      else this.selected--;
+      else this.select(roster, this.selected - 1);
     } else if (matchesKey(data, "escape")) {
       this.active = false;
       this.selected = 0;
@@ -274,10 +341,17 @@ export class FleetView {
     const key = entryKey(entry);
     this.viewing = key;
     const cleared = () => this.viewerClosed(key);
-    if (entry.kind === "ext") {
-      // The section's own view; it owns the keyboard until it closes.
+    if (entry.kind === "pill") {
+      // The section's own dialog; it owns the keyboard until it closes.
+      this.active = false;
+      if (!entry.section.openDialog) return cleared();
       this.closeViewer = () => undefined;
-      entry.section.open(entry.entry.key, this.ui).then(cleared, cleared);
+      const ui = this.ui;
+      const section = entry.section;
+      // Never throws here: a bug in another extension must not leave the list owning no keys.
+      Promise.resolve()
+        .then(() => section.openDialog?.(ui))
+        .then(cleared, cleared);
       return;
     }
     const run = entry.run;
@@ -290,8 +364,9 @@ export class FleetView {
     this.closeViewer = undefined;
     this.viewing = undefined;
     // Back on the row just viewed, if it is still listed.
-    const index = this.roster().findIndex((e) => entryKey(e) === key);
-    if (index > 0) this.selected = index;
+    const roster = this.roster();
+    const index = roster.findIndex((e) => entryKey(e) === key);
+    if (index >= 0 && this.active) this.select(roster, index);
     this.update();
   }
 

@@ -96,8 +96,8 @@ test("b in FleetView moves a foreground call to the background; its result arriv
     expect(ui.press("b")).toBe(true);
     const result = await call;
     expect(result.content[0].text).toMatch(/^The user moved this single to the background: \w+ \(general, p\/m, high\)/u);
-    // Now a background run: the widget shows it, and b is no longer offered.
-    expect(ui.widgets.has("subagents")).toBe(true);
+    // Now a background run: still listed below the prompt (no widget above it by default), and b is no longer offered.
+    expect(ui.widgets.has("subagents")).toBe(false);
     expect(ui.render("subagents-fleet")[0]).not.toContain("b background");
     expect(h.messages).toHaveLength(0);
     await h.commands.get("subagents").handler("stop all", ctx);
@@ -125,6 +125,34 @@ test("a foreground call returns the child's answer and usage, and offers no deta
     expect(result.usage.cost.total).toBeCloseTo(0.03);
     expect(ui.selects[0]?.title).toBe("[subagent general] Allow?");
     await h.emit("session_shutdown", { type: "session_shutdown" }, ctx);
+  } finally {
+    setPiInvocation(undefined);
+  }
+});
+
+test("a run that ends after its session is gone calls no pi API (a stale runtime throws, which would take pi down)", async () => {
+  const { setPiInvocation } = await import("../src/child.ts");
+  setPiInvocation({ command: process.execPath, args: [path.join(import.meta.dirname, "fixtures", "fake-pi-loop.mjs")] });
+  try {
+    const h = harness();
+    let tool: any;
+    h.pi.registerTool = (t: unknown) => void (tool = t);
+    subagents(h.pi);
+    const ctx = h.ctx({ ui: fakeUI(), cwd: mkdtempSync(path.join(tmpdir(), "subagents-cwd-")), model: { provider: "p", id: "m" } });
+    await h.emit("session_start", { type: "session_start" }, ctx);
+    await tool.execute("t1", { task: "loop forever", async: true }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 100));
+    await h.emit("session_shutdown", { type: "session_shutdown" }, ctx);
+    // pi marks the runtime stale: every call throws from now on.
+    const stale = () => {
+      throw new Error("This extension ctx is stale");
+    };
+    h.pi.appendEntry = stale as never;
+    h.pi.sendMessage = stale as never;
+    h.pi.events.emit = stale as never;
+    // The stopped child ends now; nothing may throw (an unhandled rejection fails this test).
+    await new Promise((r) => setTimeout(r, 300));
+    expect(h.messages).toHaveLength(0);
   } finally {
     setPiInvocation(undefined);
   }

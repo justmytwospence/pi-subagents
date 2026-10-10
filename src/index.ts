@@ -13,7 +13,7 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { ACTIVITY_CHANGED, ACTIVITY_GONE, ACTIVITY_HOST, ACTIVITY_SECTION, type ActivitySection } from "./activity.ts";
+import { ACTIVITY_CHANGED, ACTIVITY_GONE, ACTIVITY_HOST, ACTIVITY_SECTION, type ActivityEntry, type ActivitySection } from "./activity.ts";
 import { type AgentDef, discoverAgents } from "./agents.ts";
 import { Child, type ChildState, subagentDepth, type DialogAnswer, type DialogRequest, type Usage, addUsage, emptyUsage } from "./child.ts";
 import { agentDir, loadConfig } from "./config.ts";
@@ -22,9 +22,9 @@ import { type JevConfig, askJev } from "./jev.ts";
 import { DEFAULT_TIER_DESCRIPTIONS, type Given, type Resolved, type Tier, pickQuestions, readPicks, resolve } from "./pick.ts";
 import { type Run, displayTokens, transcriptPath } from "./run.ts";
 import { clip, recentTexts } from "./transcript.ts";
-import { FleetView } from "./ui/fleet.ts";
+import { FleetView, SUCCESS_HINT_MS } from "./ui/fleet.ts";
 import { type ViewerActions, openViewer } from "./ui/viewer.ts";
-import { taskLine } from "./ui/format.ts";
+import { elapsedMs, formatCount, formatElapsed, taskLine } from "./ui/format.ts";
 import { RunsWidget, WIDGET_MODES, type WidgetMode } from "./ui/widget.ts";
 
 export interface SubagentsConfig extends Record<string, unknown> {
@@ -34,7 +34,7 @@ export interface SubagentsConfig extends Record<string, unknown> {
   tierDescriptions: Record<Tier, string>;
   maxParallel: number;
   concurrency: number;
-  /** Which runs the widget above the editor shows: async ones (default), all, or none. */
+  /** Which runs the widget above the editor shows: none (default; FleetView below the prompt shows them, as in Claude Code), async ones, or all. */
   widget: WidgetMode;
   /** The list of subagents below the editor that ↓ at an empty prompt moves into. */
   fleetView: boolean;
@@ -48,7 +48,7 @@ export const DEFAULT_CONFIG: SubagentsConfig = {
   tierDescriptions: DEFAULT_TIER_DESCRIPTIONS,
   maxParallel: 8,
   concurrency: 4,
-  widget: "background",
+  widget: "off",
   fleetView: true,
   maxDepth: 2,
 };
@@ -200,27 +200,24 @@ export default function subagents(pi: ExtensionAPI) {
   /** For each foreground run: move its whole call to the background. */
   const detachers = new Map<string, () => void>();
 
-  const widgetMode = (): WidgetMode => (WIDGET_MODES.includes(config.widget) ? config.widget : "background");
-  /** Other extensions' sections this panel and FleetView show (pi-bg), while we host them. */
+  const widgetMode = (): WidgetMode => (WIDGET_MODES.includes(config.widget) ? config.widget : "off");
+  /** Other extensions' sources whose pills end FleetView (pi-bg's shells), while we host them. */
   const sections = new Map<string, ActivitySection>();
   let hosting = false;
   const hostedSections = () => [...sections.values()];
   /** When the user last sent a message: failed and stopped runs that ended before it leave the views. */
   let dismissedAt = 0;
+  /** Runs dismissed with `x` (in FleetView or pi-bg's dialog). */
+  const dismissed = new Set<string>();
   const widget = new RunsWidget({
     runs: () => [...runs.values()],
     queued: (mode) => queued.async + (mode === "all" ? queued.sync : 0),
     mode: widgetMode,
     dismissedAt: () => dismissedAt,
-    sections: hostedSections,
-    open: (target) => {
+    open: (runId) => {
       const ui = boundUI;
-      if (!ui) return;
-      if (target.kind === "section") void target.section.open(target.key, ui);
-      else {
-        const run = runs.get(target.id);
-        if (run) void openViewer(ui, run, viewerActions(run, ui));
-      }
+      const run = runs.get(runId);
+      if (ui && run) void openViewer(ui, run, viewerActions(run, ui));
     },
   });
   /** Steer and stop for the viewer; only a live child takes either. */
@@ -240,6 +237,17 @@ export default function subagents(pi: ExtensionAPI) {
     actions: (run) => viewerActions(run, boundUI ?? { notify: () => undefined }),
     sections: hostedSections,
     dismissedAt: () => dismissedAt,
+    dismissed: () => dismissed,
+    dismiss: (runId) => {
+      dismissed.add(runId);
+      refreshUI();
+    },
+    // Claude Code: a background subagent that succeeds leaves the panel at once, with this for 30 s.
+    note: (now) => {
+      const latest = Math.max(0, ...[...runs.values()].filter((r) => r.async && r.state.status === "done").map((r) => r.state.endedAt ?? 0));
+      if (!latest || now - latest >= SUCCESS_HINT_MS) return undefined;
+      return `${sections.has("bg") ? "/tasks" : "/subagents"} to see subagents`;
+    },
   });
   // The user's next message dismisses failures and stops they have had a chance to see.
   pi.on("input", (event) => {
@@ -247,19 +255,54 @@ export default function subagents(pi: ExtensionAPI) {
     dismissedAt = Date.now();
     refreshUI();
   });
-  /** Show a section offered to us, if we host (an interactive session with the widget on). */
+
+  /** Our runs as a source for pi-bg's background-tasks dialog (activity.ts). */
+  const runStatus = (r: Run): ActivityEntry["status"] =>
+    r.state.status === "running" ? "running" : r.state.status === "done" ? "done" : r.state.status === "stopped" ? "stopped" : "failed";
+  const ownSource: ActivitySection = {
+    id: "subagents",
+    title: "subagents",
+    entries: (now) => {
+      const all = [...runs.values()].filter((r) => !dismissed.has(r.id));
+      const running = all.filter((r) => r.state.status === "running").sort((a, b) => a.state.startedAt - b.state.startedAt);
+      const ended = all.filter((r) => r.state.status !== "running").sort((a, b) => (b.state.endedAt ?? 0) - (a.state.endedAt ?? 0));
+      return [...running, ...ended].map((r) => ({
+        key: r.id,
+        label: r.agent,
+        detail: taskLine(r.task, 80),
+        status: runStatus(r),
+        stats: `${r.state.status === "running" ? "" : `${r.state.status} · `}${formatElapsed(elapsedMs(r, now))} · ↓ ${formatCount(displayTokens(r.state.usage))} tokens`,
+        startedAt: r.state.startedAt,
+      }));
+    },
+    open: (key, ui) => {
+      const run = runs.get(key);
+      const u = ui as ExtensionContext["ui"];
+      return run ? openViewer(u, run, viewerActions(run, u)) : Promise.resolve();
+    },
+    stop: (key) => runs.get(key)?.child?.stop(),
+    dismiss: (key) => {
+      dismissed.add(key);
+      refreshUI();
+    },
+  };
+
+  /** Show a source's pill at the end of FleetView, if we host (an interactive session with FleetView on). */
   const accept = (section: ActivitySection) => {
-    if (!hosting) return;
-    sections.get(section.id)?.setHosted(false);
+    if (!hosting || section.id === ownSource.id) return;
+    const previous = sections.get(section.id);
+    // The same source offered again (it re-offers when a host announces itself) is already shown.
+    if (previous === section) return;
+    previous?.setHosted?.(false);
     sections.set(section.id, section);
-    section.setHosted(true);
+    section.setHosted?.(true);
     refreshUI();
   };
   const stopHosting = () => {
     hosting = false;
     for (const section of sections.values()) {
       try {
-        section.setHosted(false);
+        section.setHosted?.(false);
       } catch {
         // Its session may already be gone.
       }
@@ -268,7 +311,7 @@ export default function subagents(pi: ExtensionAPI) {
   };
   pi.events.on(ACTIVITY_SECTION, (data) => {
     const section = (data as { section?: ActivitySection } | undefined)?.section;
-    if (section && typeof section.render === "function" && typeof section.setHosted === "function") accept(section);
+    if (section && typeof section.pill === "function" && typeof section.setHosted === "function") accept(section);
   });
   pi.events.on(ACTIVITY_CHANGED, (data) => {
     if (sections.has((data as { id?: string } | undefined)?.id ?? "")) refreshUI();
@@ -277,16 +320,58 @@ export default function subagents(pi: ExtensionAPI) {
     const id = (data as { id?: string } | undefined)?.id ?? "";
     if (sections.delete(id)) refreshUI();
   });
+  /**
+   * Whether this runtime's session is live. After `session_shutdown` (a reload, /new, /resume) pi
+   * marks the runtime stale and every pi.* call throws; a child that ends later must not call it,
+   * or the unhandled rejection takes pi down.
+   */
+  let live = false;
+  let sessionCtx: ExtensionContext | undefined;
+  const safely = (fn: () => void) => {
+    if (!live) return;
+    try {
+      fn();
+    } catch {
+      // The runtime went stale between the check and the call.
+    }
+  };
+  /**
+   * Results owed to the agent. Sent only while pi is idle: a follow-up queued during a turn is
+   * dropped when the user presses Esc. Several that pile up go out as one message.
+   */
+  const owedResults: { content: string; details: unknown }[] = [];
+  const deliverResult = (content: string, details?: unknown) => {
+    if (!live) return;
+    owedResults.push({ content, details });
+    flushResults(sessionCtx);
+  };
+  const flushResults = (c: Pick<ExtensionContext, "isIdle"> | undefined) => {
+    if (!live || !owedResults.length || c?.isIdle?.() === false) return;
+    const items = owedResults.splice(0);
+    safely(() =>
+      pi.sendMessage(
+        { customType: "subagent-result", content: items.map((i) => i.content).join("\n\n---\n\n"), display: true, details: items.length === 1 ? items[0]?.details : { batches: items.map((i) => i.details) } },
+        { triggerTurn: true, deliverAs: "followUp" },
+      ),
+    );
+  };
+  pi.on("agent_settled", (_event, c) => flushResults(c));
+
   /** Async runs as outside work pi-bg's bg_wait can wait on; nothing listens without pi-bg. */
-  const external = (run: Run) => {
+  const external = (run: Run, chain?: { step: number; of: number }) => {
     const done = run.state.status !== "running";
     const elapsed = Math.round(((run.state.endedAt ?? Date.now()) - run.state.startedAt) / 1000);
-    pi.events.emit("bg:external", {
-      id: `subagent:${run.id}`,
-      label: `${run.agent}: ${taskLine(run.task, 60)}`,
-      state: !done ? "running" : run.state.status === "done" ? "done" : "failed",
-      ...(done ? { summary: `${run.state.status} after ${elapsed}s; its result arrives as a message` } : {}),
-    });
+    // A chain's result message comes only after its last step.
+    const after =
+      chain && chain.step < chain.of ? `; step ${chain.step} of ${chain.of} in a chain, which goes on (its result arrives after the last step)` : "; its result arrives as a message";
+    safely(() =>
+      pi.events.emit("bg:external", {
+        id: `subagent:${run.id}`,
+        label: `${run.agent}: ${taskLine(run.task, 60)}`,
+        state: !done ? "running" : run.state.status === "done" ? "done" : "failed",
+        ...(done ? { summary: `${run.state.status} after ${elapsed}s${after}` } : {}),
+      }),
+    );
   };
   /** Whether pi-bg is loaded (it answers bg:probe). */
   const hasBg = () => {
@@ -314,7 +399,7 @@ export default function subagents(pi: ExtensionAPI) {
   };
 
   const record = (run: Run) => {
-    pi.appendEntry(RUN_ENTRY, { ...view(run), outputPath: run.outputPath, async: run.async });
+    safely(() => pi.appendEntry(RUN_ENTRY, { ...view(run), outputPath: run.outputPath, async: run.async }));
   };
 
   /** Forward a child's dialog (for example a tool gate's approval) to the parent's UI. */
@@ -434,17 +519,24 @@ export default function subagents(pi: ExtensionAPI) {
   const usageOf = (list: Run[]): Usage => list.reduce((sum, r) => addUsage(sum, r.state.usage), emptyUsage());
 
   pi.on("session_start", (_event, ctx) => {
+    live = true;
+    sessionCtx = ctx;
     config = loadConfig("pi-subagents", DEFAULT_CONFIG, ctx.cwd);
     bindUI(ctx);
-    // Host other extensions' sections when we have a panel to put them in.
-    hosting = Boolean(boundUI) && widgetMode() !== "off";
+    // Host other extensions' pills at the end of FleetView, when it is on.
+    hosting = Boolean(boundUI) && config.fleetView !== false;
     if (hosting) pi.events.emit(ACTIVITY_HOST, {});
+    // Our runs, for pi-bg's background-tasks dialog.
+    if (boundUI) pi.events.emit(ACTIVITY_SECTION, { section: ownSource });
     refreshUI();
   });
 
   pi.on("session_shutdown", () => {
     for (const run of runs.values()) run.child?.stop();
     stopHosting();
+    safely(() => pi.events.emit(ACTIVITY_GONE, { id: ownSource.id }));
+    live = false;
+    sessionCtx = undefined;
     boundUI = undefined;
     // The UI may already be gone; each part still lets go of its timers and listeners.
     for (const part of [widget, fleet]) {
@@ -534,12 +626,12 @@ export default function subagents(pi: ExtensionAPI) {
       /** Whether this call's runs are in the background: from the start (`async`), or once detached. */
       const call = { async: Boolean(params.async), detach: undefined as (() => void) | undefined };
 
-      const runOne = async (item: Item, r: Resolved, dequeue: () => void): Promise<Run> => {
+      const runOne = async (item: Item, r: Resolved, dequeue: () => void, chain?: { step: number; of: number }): Promise<Run> => {
         const cwd = await cwdFor(item);
         dequeue();
         const run = startRun(ctx, item, r, { cwd, ...(fork ? { fork } : {}), async: call.async, onUpdate: update });
         started.push(run);
-        if (call.async) external(run);
+        if (call.async) external(run, chain);
         update();
         // A foreground run stops with the call, unless it has been moved to the background.
         const abort = () => {
@@ -550,7 +642,8 @@ export default function subagents(pi: ExtensionAPI) {
         await run.child?.done;
         signal?.removeEventListener("abort", abort);
         detachers.delete(run.id);
-        if (call.async) external(run);
+        // The chain stops at a step that did not succeed: that step is its last.
+        if (call.async) external(run, chain && run.state.status === "done" ? chain : undefined);
         return run;
       };
 
@@ -568,7 +661,7 @@ export default function subagents(pi: ExtensionAPI) {
             let previous = "";
             const done: Run[] = [];
             for (const [index, item] of items.entries()) {
-              const run = await runOne({ ...item, task: item.task.replaceAll("{previous}", previous) }, resolved[index] as Resolved, dequeue);
+              const run = await runOne({ ...item, task: item.task.replaceAll("{previous}", previous) }, resolved[index] as Resolved, dequeue, { step: index + 1, of: items.length });
               done.push(run);
               if (run.state.status !== "done") break;
               previous = run.state.output;
@@ -595,21 +688,18 @@ export default function subagents(pi: ExtensionAPI) {
         backgroundCount++;
         // Released by id: without one, pi-herdr ends the oldest hold, which may be another extension's.
         const hold = `subagents:${++holdCount}`;
-        pi.events.emit("herdr:background", { active: true, label: `subagents (${items.length})`, id: hold });
+        safely(() => pi.events.emit("herdr:background", { active: true, label: `subagents (${items.length})`, id: hold }));
         void work
           .then((list) => {
             backgroundCount--;
-            pi.events.emit("herdr:background", { active: false, id: hold });
+            safely(() => pi.events.emit("herdr:background", { active: false, id: hold }));
             const text = list.filter(Boolean).map(resultText).join("\n\n---\n\n");
-            pi.sendMessage(
-              { customType: "subagent-result", content: `Subagent ${mode} finished:\n\n${text}`, display: true, details: { mode, runs: list.filter(Boolean).map((r) => view(r, true)) } },
-              { triggerTurn: true, deliverAs: "followUp" },
-            );
+            deliverResult(`Subagent ${mode} finished:\n\n${text}`, { mode, runs: list.filter(Boolean).map((r) => view(r, true)) });
           })
           .catch((error: unknown) => {
             backgroundCount--;
-            pi.events.emit("herdr:background", { active: false, id: hold });
-            pi.sendMessage({ customType: "subagent-result", content: `Subagent ${mode} failed: ${error instanceof Error ? error.message : String(error)}`, display: true }, { triggerTurn: true, deliverAs: "followUp" });
+            safely(() => pi.events.emit("herdr:background", { active: false, id: hold }));
+            deliverResult(`Subagent ${mode} failed: ${error instanceof Error ? error.message : String(error)}`);
           });
       };
 

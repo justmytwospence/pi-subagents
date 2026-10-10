@@ -35,27 +35,33 @@ while they run, which [pi-herdr](https://github.com/justmytwospence/pi-herdr) sh
 ## Watching subagents
 
 The tool row only updates while its call is open, so an async run would otherwise go quiet until
-its result arrives. Three views follow the children while they work (in the TUI only):
+its result arrives. The views follow the children while they work (in the TUI only), laid out as
+in Claude Code (2.1.296):
 
-- **Widget** (above the editor): one row per running subagent with a spinner, the agent, its task,
-  model and effort (Jev's picks marked "(Jev)"), turns, tokens, cost and elapsed time, and its
-  current tool or text beneath. Tasks waiting for a slot show as queued. A finished run stays 8
-  seconds with a status icon; a failed or stopped one stays until your next message, several of them
-  sharing one row (`· +2 more ended`). Then the widget hides. By default it
-  shows async runs only, since a foreground run already renders in its tool row. Double-click a
-  row (fullscreen mode) to open that run's conversation.
-- **FleetView** (below the editor): `main` and every running subagent, with elapsed time and
-  tokens. Press `↓` (or `←`) at an empty prompt to move into it, `↑`/`↓` to select, `Enter` to open
-  the selected run's conversation, `x` twice to stop it, `b` to move a foreground run to the
-  background (the tool call returns and the result arrives as a message, like `async`), and `Esc`
-  (or `↑` past `main`) to return to the prompt. Finished
-  runs stay 5 seconds (failed or stopped ones until your next message); a run whose conversation is
-  open stays until you close it.
+- **FleetView**, Claude Code's subagent panel below the prompt: `main` and every running subagent,
+  with elapsed time and tokens. Press `↓` (or `←`) at an empty prompt to move into it, `↑`/`↓` to
+  select, `Enter` to open the selected run's conversation, `x` twice to stop it, `b` to move a
+  foreground run to the background (the tool call returns and the result arrives as a message,
+  like `async`), and `Esc` (or `↑` past `main`) to return to the prompt. As in Claude Code, a run
+  that succeeds leaves at once and a dim `/subagents to see subagents` (`/tasks ...` with pi-bg)
+  shows for 30 seconds; a failed or stopped run stays until your next message, or `x` dismisses it.
+  A run whose conversation is open stays until you close it. Selection and stop-arming follow the
+  row, not its position, so rows coming and going never move them onto another run.
 - **Conversation viewer** (an overlay): the child's conversation as it streams, with tool calls,
   results, live tool output, queued steering messages and current activity. It follows new output
   until you scroll up (`↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`). `Enter` opens a composer that steers
   the child, `x` twice stops it, `b` moves a foreground run to the background, `m` cycles Markdown rendering (assistant text, tool results too,
   or none), and `Esc` or `q` closes the viewer. It stays open when the run ends.
+- **Widget** above the editor, off by default (Claude Code has none): `"widget": "background"` (async
+  runs) or `"all"` turns it on. One row per running subagent with a spinner, the agent, its task,
+  model and effort (Jev's picks marked "(Jev)"), turns, tokens, cost and elapsed time, and its
+  current tool or text beneath; queued tasks; a finished run for 8 seconds, a failed or stopped one
+  until your next message (several sharing one row). Double-click a row (fullscreen mode) to open
+  that run's conversation.
+
+A result that comes due while the agent is working waits for the turn to settle before it is sent
+(a follow-up queued mid-turn is dropped when you press Esc); several go out as one message. A run
+that ends after its session is gone (`/reload`, `/new`) calls nothing in pi.
 
 `/subagents` lists this session's runs, live or recorded, and opens the one you pick in the viewer;
 `/subagents <id>` (or a unique prefix) opens one directly. `/subagents stop <id>` stops a run, and
@@ -67,16 +73,19 @@ The children stay `pi --mode rpc` processes: the views are rebuilt from their RP
 ## With pi-bg
 
 Both work alone. With [pi-bg](https://github.com/justmytwospence/pi-bg) installed too, they work
-as one, through pi's event bus (the activity protocol in `src/activity.ts`, copied into both repos):
+as one, as in Claude Code, through pi's event bus (the activity protocol in `src/activity.ts`,
+copied into both repos):
 
-- **One panel.** pi-bg's background tasks become a section of this widget, under the subagents,
-  with one line budget for both (16 rows, split by need) instead of a second panel. With the widget
-  `"off"` (or outside the TUI) nothing is hosted, and pi-bg shows its own.
-- **One keyboard list.** FleetView lists the background tasks after the runs: `Enter` opens a
-  task's log viewer, `x` twice stops it.
+- **One list under the prompt.** FleetView ends with pi-bg's pill (`2 shells`, `· 1 failed`); `↓`
+  moves through the subagents to it, and Enter opens pi-bg's background-tasks dialog. pi-bg draws
+  no pill of its own then. With FleetView off (`"fleetView": false`) or outside the TUI, pi-bg shows
+  its own.
+- **One dialog.** pi-bg's `/tasks` lists this session's runs under their own heading: Enter opens a
+  run's conversation, `x` twice stops it, `x` on an ended one dismisses it.
 - **Waiting on async runs.** Each async run is outside work pi-bg's `bg_wait subagent:<id>` can
   wait on inside the turn, so the agent shows as working (in pi, herdr and tmux) until the run
-  ends; the async result names the ids. The result still arrives as its own message.
+  ends; the async result names the ids. A chain's steps say the chain goes on. The result still
+  arrives as its own message.
 
 ## Agents
 
@@ -125,14 +134,14 @@ On 15 tasks across six agents, Jev picked the expected agent every time, in abou
   "jev": { "enabled": true, "provider": "typesafe", "model": "jev-latest", "timeoutMs": 3000 },
   "maxParallel": 8,
   "concurrency": 4,
-  "widget": "background",
+  "widget": "off",
   "fleetView": true,
   "maxDepth": 2
 }
 ```
 
 A tier left out uses the parent's model. `tierDescriptions` overrides what Jev reads for each tier.
-`widget` is `"background"` (async runs only), `"all"`, or `"off"`; `fleetView: false` turns the
+`widget` is `"off"` (default), `"background"` (async runs only), or `"all"`; `fleetView: false` turns the
 list below the editor off. `maxDepth` is how many levels of subagents may run below the main
 session: with 2, a subagent can start subagents of its own, but theirs get no `subagent` tool. Requires Pi 0.99 or newer for classifier models.
 
