@@ -6,7 +6,7 @@ import { KEY, fakeRun, fakeUI, plain } from "./ui-helpers.ts";
 
 afterEach(() => vi.useRealTimers());
 
-const names = (roster: ReturnType<typeof fleetRoster>) => roster.map((e) => (e.kind === "main" ? "main" : e.run.agent));
+const names = (roster: ReturnType<typeof fleetRoster>) => roster.map((e) => (e.kind === "main" ? "main" : e.kind === "run" ? e.run.agent : e.entry.label));
 
 test("the roster: main, then running, viewed and just-finished runs, earliest first", () => {
   const now = 100_000;
@@ -15,7 +15,7 @@ test("the roster: main, then running, viewed and just-finished runs, earliest fi
   const fresh = fakeRun({ agent: "fresh", state: { status: "done", startedAt: 20, endedAt: now - FLEET_LINGER_MS + 1 } });
   const stale = fakeRun({ agent: "stale", state: { status: "failed", startedAt: 30, endedAt: now - FLEET_LINGER_MS } });
   expect(names(fleetRoster([late, early, fresh, stale], now))).toEqual(["main", "early", "fresh", "late"]);
-  expect(names(fleetRoster([late, early, fresh, stale], now, stale.id))).toEqual(["main", "early", "fresh", "stale", "late"]);
+  expect(names(fleetRoster([late, early, fresh, stale], now, `run:${stale.id}`))).toEqual(["main", "early", "fresh", "stale", "late"]);
   expect(fleetRoster([stale], now)).toHaveLength(1);
 });
 

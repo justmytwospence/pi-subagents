@@ -41,7 +41,8 @@ its result arrives. Three views follow the children while they work (in the TUI 
   model and effort (Jev's picks marked "(Jev)"), turns, tokens, cost and elapsed time, and its
   current tool or text beneath. Tasks waiting for a slot show as queued. A finished run stays 8
   seconds with a status icon (20 if it failed or was stopped), then the widget hides. By default it
-  shows async runs only, since a foreground run already renders in its tool row.
+  shows async runs only, since a foreground run already renders in its tool row. Double-click a
+  row (fullscreen mode) to open that run's conversation.
 - **FleetView** (below the editor): `main` and every running subagent, with elapsed time and
   tokens. Press `↓` (or `←`) at an empty prompt to move into it, `↑`/`↓` to select, `Enter` to open
   the selected run's conversation, `x` twice to stop it, `b` to move a foreground run to the
@@ -60,6 +61,20 @@ its result arrives. Three views follow the children while they work (in the TUI 
 resumed session open from their `messages.jsonl`.
 
 The children stay `pi --mode rpc` processes: the views are rebuilt from their RPC event streams.
+
+## With pi-bg
+
+Both work alone. With [pi-bg](https://github.com/justmytwospence/pi-bg) installed too, they work
+as one, through pi's event bus (the activity protocol in `src/activity.ts`, copied into both repos):
+
+- **One panel.** pi-bg's background tasks become a section of this widget, under the subagents,
+  with one line budget for both (16 rows, split by need) instead of a second panel. With the widget
+  `"off"` (or outside the TUI) nothing is hosted, and pi-bg shows its own.
+- **One keyboard list.** FleetView lists the background tasks after the runs: `Enter` opens a
+  task's log viewer, `x` twice stops it.
+- **Waiting on async runs.** Each async run is outside work pi-bg's `bg_wait subagent:<id>` can
+  wait on inside the turn, so the agent shows as working (in pi, herdr and tmux) until the run
+  ends; the async result names the ids. The result still arrives as its own message.
 
 ## Agents
 

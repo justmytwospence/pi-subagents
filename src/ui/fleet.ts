@@ -6,8 +6,11 @@
 // stay a few seconds, and a run whose viewer is open stays until it closes.
 // Keys go through `onTerminalInput`, which sees them before the editor and can consume them, so
 // nothing changes for normal typing: only arrows at an empty prompt, with the editor focused.
+// Other extensions' entries (activity.ts; pi-bg's background tasks) are listed after the runs:
+// Enter opens their own detail view, x twice stops them.
 // Adapted from tintinweb/pi-subagents (MIT): https://github.com/tintinweb/pi-subagents
 import { type TUI, isKeyRelease, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import type { ActivityEntry, ActivitySection } from "../activity.ts";
 import type { Run } from "../run.ts";
 import { displayTokens } from "../run.ts";
 import { type Theme, elapsedMs, formatCost, formatCount, formatElapsed, rightAlign, statusIcon, taskLine } from "./format.ts";
@@ -20,15 +23,28 @@ const TICK_MS = 250;
 /** How long a finished run stays in the list. */
 export const FLEET_LINGER_MS = 5_000;
 
-export type FleetEntry = { kind: "main" } | { kind: "run"; run: Run };
+export type FleetEntry = { kind: "main" } | { kind: "run"; run: Run } | { kind: "ext"; section: ActivitySection; entry: ActivityEntry };
 
-/** `main`, then the runs worth listing, earliest first: running, being viewed, or just finished. */
-export function fleetRoster(runs: readonly Run[], now: number, viewing?: string): FleetEntry[] {
+const entryKey = (e: FleetEntry) => (e.kind === "run" ? `run:${e.run.id}` : e.kind === "ext" ? `${e.section.id}:${e.entry.key}` : "main");
+
+/**
+ * `main`, then the runs worth listing, earliest first: running, being viewed, or just finished;
+ * then each section's entries (the section decides which), earliest first.
+ */
+export function fleetRoster(runs: readonly Run[], now: number, viewing?: string, sections: readonly ActivitySection[] = []): FleetEntry[] {
   const listed = runs
-    .filter((r) => r.state.status === "running" || r.id === viewing || (r.state.endedAt !== undefined && now - r.state.endedAt < FLEET_LINGER_MS))
+    .filter((r) => r.state.status === "running" || `run:${r.id}` === viewing || (r.state.endedAt !== undefined && now - r.state.endedAt < FLEET_LINGER_MS))
     .sort((a, b) => a.state.startedAt - b.state.startedAt);
-  return [{ kind: "main" }, ...listed.map((run) => ({ kind: "run" as const, run }))];
+  const ext = sections.flatMap((section) =>
+    section
+      .entries(now)
+      .sort((a, b) => a.startedAt - b.startedAt)
+      .map((entry) => ({ kind: "ext" as const, section, entry })),
+  );
+  return [{ kind: "main" }, ...listed.map((run) => ({ kind: "run" as const, run })), ...ext];
 }
+
+const extIcon = (status: ActivityEntry["status"], theme: Theme) => statusIcon(status === "stopped" ? "stopped" : status, theme);
 
 export interface FleetFrame {
   roster: readonly FleetEntry[];
@@ -45,16 +61,18 @@ export interface FleetFrame {
 }
 
 export function renderFleet({ roster, selected, active, stopArmed, canBackground, now, width, theme }: FleetFrame): string[] {
-  const rows = roster.slice(1).flatMap((e) => (e.kind === "run" ? [e.run] : []));
+  const rows = roster.slice(1);
   if (!rows.length) return [];
   const sel = Math.min(selected, rows.length);
   const bullet = (i: number) => (i === sel ? theme.fg("accent", "●") : theme.fg("dim", "○"));
   const chosen = rows[sel - 1];
-  const stoppable = chosen?.state.status === "running";
+  const stoppable = chosen?.kind === "run" ? chosen.run.state.status === "running" : chosen?.kind === "ext" ? chosen.entry.status === "running" && Boolean(chosen.section.stop) : false;
+  const chosenName = chosen?.kind === "run" ? chosen.run.agent : chosen?.kind === "ext" ? chosen.entry.label : "";
+  const kinds = [...new Set(rows.map((e) => (e.kind === "run" ? "subagents" : e.kind === "ext" ? e.section.title : "")))].filter(Boolean);
   const hint = !active
-    ? theme.fg("dim", "↓ or ← for subagents")
+    ? theme.fg("dim", `↓ or ← for ${kinds.join(" and ")}`)
     : stopArmed && stoppable
-      ? theme.fg("error", `x again to stop ${chosen.agent}`)
+      ? theme.fg("error", `x again to stop ${chosenName}`)
       : theme.fg("dim", `↑↓ select · enter view${stoppable ? " · x stop" : ""}${stoppable && canBackground ? " · b background" : ""} · esc back`);
   const lines = [truncateToWidth(`  ${hint}`, width), "", truncateToWidth(`  ${bullet(0)} ${sel === 0 ? theme.fg("text", "main") : "main"}`, width)];
   const visible = Math.min(MAX_ROWS, rows.length);
@@ -62,9 +80,17 @@ export function renderFleet({ roster, selected, active, stopArmed, canBackground
   const start = selRow < visible ? 0 : selRow - visible + 1;
   if (start > 0) lines.push(rightAlign("", theme.fg("dim", `↑ ${start} more`), width));
   for (let i = start; i < start + visible; i++) {
-    const run = rows[i];
-    if (!run) continue;
+    const row = rows[i];
+    if (!row || row.kind === "main") continue;
     const on = i + 1 === sel;
+    if (row.kind === "ext") {
+      const e = row.entry;
+      const left = `  ${bullet(i + 1)} ${on ? theme.bold(theme.fg("text", e.label)) : theme.fg("muted", e.label)}  ${on ? theme.fg("text", taskLine(e.detail, 60)) : taskLine(e.detail, 60)}`;
+      const done = e.status === "running" ? "" : `${extIcon(e.status, theme)} `;
+      lines.push(rightAlign(left, done + theme.fg(on ? "text" : "dim", e.stats), width));
+      continue;
+    }
+    const run = row.run;
     const left = `  ${bullet(i + 1)} ${on ? theme.bold(theme.fg("text", run.agent)) : theme.fg("muted", run.agent)}  ${on ? theme.fg("text", taskLine(run.task, 60)) : taskLine(run.task, 60)}`;
     const cost = formatCost(run.state.usage.cost.total);
     const stats = `${formatElapsed(elapsedMs(run, now))} · ↓ ${formatCount(displayTokens(run.state.usage))} tokens${cost ? ` · ${cost}` : ""}`;
@@ -90,6 +116,8 @@ export interface FleetSource {
   runs(): readonly Run[];
   enabled(): boolean;
   actions(run: Run): ViewerActions;
+  /** Other extensions' sections whose entries are listed after the runs (pi-bg). */
+  sections?(): readonly ActivitySection[];
 }
 
 type KeyResult = { consume?: boolean; data?: string } | undefined;
@@ -118,7 +146,7 @@ export class FleetView {
   }
 
   private roster() {
-    return fleetRoster(this.source.runs(), Date.now(), this.viewing);
+    return fleetRoster(this.source.runs(), Date.now(), this.viewing, this.source.sections?.() ?? []);
   }
 
   update(): void {
@@ -190,6 +218,9 @@ export class FleetView {
       // Two presses, so a stray x cannot kill a run.
       if (armed) this.source.actions(entry.run).stop?.();
       else this.stopArmed = true;
+    } else if (matchesKey(data, "x") && entry?.kind === "ext" && entry.entry.status === "running" && entry.section.stop) {
+      if (armed) entry.section.stop(entry.entry.key);
+      else this.stopArmed = true;
     } else if (matchesKey(data, "b") && entry?.kind === "run" && this.source.actions(entry.run).canBackground?.()) {
       this.source.actions(entry.run).background?.();
     } else if (matchesKey(data, "down")) {
@@ -233,19 +264,26 @@ export class FleetView {
       this.selected = 0;
       return;
     }
+    const key = entryKey(entry);
+    this.viewing = key;
+    const cleared = () => this.viewerClosed(key);
+    if (entry.kind === "ext") {
+      // The section's own view; it owns the keyboard until it closes.
+      this.closeViewer = () => undefined;
+      entry.section.open(entry.entry.key, this.ui).then(cleared, cleared);
+      return;
+    }
     const run = entry.run;
-    this.viewing = run.id;
-    const cleared = () => this.viewerClosed(run.id);
     openViewer(this.ui, run, this.source.actions(run), (close) => {
       this.closeViewer = close;
     }).then(cleared, cleared);
   }
 
-  private viewerClosed(id: string) {
+  private viewerClosed(key: string) {
     this.closeViewer = undefined;
     this.viewing = undefined;
     // Back on the row just viewed, if it is still listed.
-    const index = this.roster().findIndex((e) => e.kind === "run" && e.run.id === id);
+    const index = this.roster().findIndex((e) => entryKey(e) === key);
     if (index > 0) this.selected = index;
     this.update();
   }
