@@ -86,6 +86,25 @@ test("Enter steers through a composer; x twice stops; Esc closes", () => {
   v.dispose();
 });
 
+test("m cycles Markdown: assistant text, then tool results too, then nothing", () => {
+  const { v, run } = viewer();
+  run.conversation.apply({ type: "message_end", message: { role: "toolResult", toolName: "read", content: [{ type: "text", text: "# Heading" }] } });
+  const out = () => text(v.render(100));
+  expect(out()).toContain("m md ·");
+  expect(out()).toContain("Looking with rg.");
+  expect(out()).toContain("# Heading");
+  v.handleInput("m");
+  expect(out()).toContain("m md+ ·");
+  expect(out()).not.toContain("# Heading");
+  v.handleInput("m");
+  expect(out()).toContain("m raw ·");
+  expect(out()).toContain("Looking with **rg**.");
+  expect(out()).toContain("# Heading");
+  v.handleInput("m");
+  expect(out()).toContain("m md ·");
+  v.dispose();
+});
+
 test("a finished run offers no steer or stop and shows how it ended", () => {
   const run = liveRun();
   run.state = { ...run.state, status: "failed", error: "pi exited (1)", endedAt: run.state.startedAt + 3_000 };

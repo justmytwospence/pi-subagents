@@ -1,5 +1,6 @@
 // A live, auto-scrolling view of one subagent's conversation, as an overlay. Enter opens a composer
-// that steers the child; `x` twice stops it; Esc (or q) closes. It stays open when the run ends.
+// that steers the child; `x` twice stops it; `m` cycles what renders as Markdown; Esc (or q)
+// closes. It stays open when the run ends.
 // Adapted from tintinweb/pi-subagents (MIT): https://github.com/tintinweb/pi-subagents
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { type Component, Input, Markdown, type MarkdownTheme, type TUI, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
@@ -14,6 +15,11 @@ const CHROME_LINES = 7;
 const MIN_VIEWPORT = 3;
 /** Lines of a running tool's partial output shown live. */
 const PARTIAL_LINES = 6;
+
+/** How much renders as Markdown: assistant text (default), tool results too, or nothing. */
+export type MarkdownMode = "assistant" | "all" | "off";
+const MARKDOWN_MODES: readonly MarkdownMode[] = ["assistant", "all", "off"];
+const MARKDOWN_LABELS: Record<MarkdownMode, string> = { assistant: "md", all: "md+", off: "raw" };
 
 export interface ViewerActions {
   /** Send a steering message; false when the run can no longer be steered. */
@@ -56,6 +62,8 @@ function markdownTheme(theme: Theme): MarkdownTheme {
 }
 
 export class ConversationViewer implements Component {
+  /** Shared by every viewer in this Pi, so `m` sticks for the session. */
+  static markdownMode: MarkdownMode = "assistant";
   private scroll = 0;
   private follow = true;
   private stopArmed = false;
@@ -66,7 +74,7 @@ export class ConversationViewer implements Component {
   private readonly timer: ReturnType<typeof setInterval>;
   private readonly md: MarkdownTheme;
   private readonly markdown = new WeakMap<Message, { component: Markdown; text: string; failed?: boolean }>();
-  private readonly lineCache = new WeakMap<Message, { width: number; lines: string[] }>();
+  private readonly lineCache = new WeakMap<Message, { width: number; mode: MarkdownMode; lines: string[] }>();
 
   constructor(
     private readonly tui: TuiLike,
@@ -116,6 +124,14 @@ export class ConversationViewer implements Component {
     if (matchesKey(data, "enter") && this.canSteer()) {
       this.stopArmed = false;
       this.openComposer();
+      return;
+    }
+    if (matchesKey(data, "m")) {
+      // The escape hatch for output that Markdown would reshape (diffs, logs, # comments).
+      const mode = ConversationViewer.markdownMode;
+      ConversationViewer.markdownMode = MARKDOWN_MODES[(MARKDOWN_MODES.indexOf(mode) + 1) % MARKDOWN_MODES.length] ?? "assistant";
+      this.stopArmed = false;
+      this.tui.requestRender();
       return;
     }
     if (matchesKey(data, "x")) {
@@ -204,8 +220,13 @@ export class ConversationViewer implements Component {
       if (this.canSteer()) actions.push(th.fg("dim", "Enter steer"));
       if (this.canStop()) actions.push(this.stopArmed ? th.fg("error", "x again to stop") : th.fg("dim", "x stop"));
       const position = content.length <= page ? "all" : `${Math.round(((start + page) / content.length) * 100)}%`;
-      actions.push(th.fg("dim", `${content.length} lines · ${position}`));
-      lines.push(row(spread(actions.join(th.fg("dim", " · ")), th.fg("dim", "↑↓ scroll · PgUp/PgDn · Esc close"), inner)));
+      actions.push(th.fg("dim", `m ${MARKDOWN_LABELS[ConversationViewer.markdownMode]}`));
+      const sep = th.fg("dim", " · ");
+      const nav = th.fg("dim", "↑↓ scroll · PgUp/PgDn · Esc close");
+      // The line count goes first when the footer is short of room.
+      const withCount = [...actions, th.fg("dim", `${content.length} lines · ${position}`)].join(sep);
+      const left = visibleWidth(withCount) + visibleWidth(nav) + 1 <= inner ? withCount : actions.join(sep);
+      lines.push(row(spread(left, nav, inner)));
     }
     lines.push(th.fg("border", `╰${"─".repeat(width - 2)}╯`));
     return lines;
@@ -218,11 +239,12 @@ export class ConversationViewer implements Component {
     const out: string[] = [];
     for (const message of c.messages) {
       const streaming = message === c.streaming;
+      const mode = ConversationViewer.markdownMode;
       const cached = streaming ? undefined : this.lineCache.get(message);
-      let lines = cached?.width === width ? cached.lines : undefined;
+      let lines = cached?.width === width && cached.mode === mode ? cached.lines : undefined;
       if (!lines) {
         lines = this.messageLines(message, width).map((l) => truncateToWidth(l, width));
-        if (!streaming) this.lineCache.set(message, { width, lines });
+        if (!streaming) this.lineCache.set(message, { width, mode, lines });
       }
       if (!lines.length) continue;
       if (out.length) out.push("");
@@ -254,7 +276,7 @@ export class ConversationViewer implements Component {
         return text ? [th.fg("accent", "[User]"), ...wrapTextWithAnsi(text, width)] : [];
       case "assistant": {
         const lines = [th.bold("[Assistant]")];
-        if (text) lines.push(...this.markdownLines(message, text, width));
+        if (text) lines.push(...(ConversationViewer.markdownMode === "off" ? wrapTextWithAnsi(text, width) : this.markdownLines(message, text, width)));
         for (const block of message.content) {
           if (block.type === "toolCall") lines.push(th.fg("muted", `  ▸ ${describeTool(block.name, block.arguments, Math.max(20, width - 20))}`));
         }
@@ -265,7 +287,8 @@ export class ConversationViewer implements Component {
       case "toolResult": {
         if (!text && !message.isError) return [];
         const label = `[${message.isError ? "Error" : "Result"}${message.toolName ? `: ${message.toolName}` : ""}]`;
-        const lines = [th.fg(message.isError ? "error" : "dim", label), ...wrapTextWithAnsi(text, width).map((l) => th.fg("dim", l))];
+        const body = ConversationViewer.markdownMode === "all" ? this.markdownLines(message, text, width, true) : wrapTextWithAnsi(text, width).map((l) => th.fg("dim", l));
+        const lines = [th.fg(message.isError ? "error" : "dim", label), ...body];
         if (message.elided) lines.push(th.fg("dim", `… (${message.elided} more characters)`));
         return lines;
       }
@@ -276,10 +299,11 @@ export class ConversationViewer implements Component {
     }
   }
 
-  private markdownLines(message: Message, text: string, width: number): string[] {
+  private markdownLines(message: Message, text: string, width: number, dim = false): string[] {
     let entry = this.markdown.get(message);
     if (!entry) {
-      entry = { component: new Markdown(text, 0, 0, this.md, undefined, { preserveOrderedListMarkers: true, preserveBackslashEscapes: true }), text };
+      const style = dim ? { color: (t: string) => this.theme.fg("dim", t) } : undefined;
+      entry = { component: new Markdown(text, 0, 0, this.md, style, { preserveOrderedListMarkers: true, preserveBackslashEscapes: true }), text };
       this.markdown.set(message, entry);
     } else if (entry.text !== text) {
       entry.component.setText(text);
@@ -294,7 +318,8 @@ export class ConversationViewer implements Component {
         entry.failed = true;
       }
     }
-    return wrapTextWithAnsi(text, width);
+    const raw = wrapTextWithAnsi(text, width);
+    return dim ? raw.map((l) => this.theme.fg("dim", l)) : raw;
   }
 
   invalidate(): void {

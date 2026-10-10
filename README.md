@@ -50,8 +50,8 @@ its result arrives. Three views follow the children while they work (in the TUI 
 - **Conversation viewer** (an overlay): the child's conversation as it streams, with tool calls,
   results, live tool output, queued steering messages and current activity. It follows new output
   until you scroll up (`↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`). `Enter` opens a composer that steers
-  the child, `x` twice stops it, and `Esc` or `q` closes the viewer. It stays open when the run
-  ends.
+  the child, `x` twice stops it, `m` cycles Markdown rendering (assistant text, tool results too,
+  or none), and `Esc` or `q` closes the viewer. It stays open when the run ends.
 
 `/subagents` lists this session's runs, live or recorded, and opens the one you pick in the viewer;
 `/subagents <id>` (or a unique prefix) opens one directly. `/subagents stop <id>` stops a run, and
