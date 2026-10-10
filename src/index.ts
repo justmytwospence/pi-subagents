@@ -19,12 +19,13 @@ import { Child, type ChildState, subagentDepth, type DialogAnswer, type DialogRe
 import { agentDir, loadConfig } from "./config.ts";
 import { Conversation, type Message, readTranscript, transcriptWriter } from "./conversation.ts";
 import { type JevConfig, askJev } from "./jev.ts";
+import { runLabel, taskLabel } from "./label.ts";
 import { DEFAULT_TIER_DESCRIPTIONS, type Given, type Resolved, type Tier, pickQuestions, readPicks, resolve } from "./pick.ts";
 import { type Run, displayTokens, transcriptPath } from "./run.ts";
 import { clip, recentTexts } from "./transcript.ts";
 import { FleetView, SUCCESS_HINT_MS } from "./ui/fleet.ts";
 import { type ViewerActions, openViewer } from "./ui/viewer.ts";
-import { elapsedMs, formatCount, formatElapsed, taskLine } from "./ui/format.ts";
+import { elapsedMs, formatCount, formatElapsed } from "./ui/format.ts";
 import { RunsWidget, WIDGET_MODES, type WidgetMode } from "./ui/widget.ts";
 
 export interface SubagentsConfig extends Record<string, unknown> {
@@ -60,6 +61,7 @@ const RUN_ENTRY = "subagents:run";
 const TaskItem = Type.Object({
   agent: Type.Optional(Type.String({ description: "Agent name; omit to let Jev choose" })),
   task: Type.String({ description: "The complete, self-contained task" }),
+  label: Type.Optional(Type.String({ description: "Short task name for lists and headings; omit to derive from the task" })),
   cwd: Type.Optional(Type.String({ description: "Working directory for this task" })),
   model: Type.Optional(Type.String({ description: "provider/model; omit to use the agent's or Jev's tier" })),
   thinking: Type.Optional(Type.String({ description: "off|minimal|low|medium|high|xhigh|max; omit to let Jev choose" })),
@@ -73,11 +75,12 @@ const Params = Type.Object({
   ),
   agent: Type.Optional(Type.String({ description: "Agent for a single task; omit to let Jev choose" })),
   task: Type.Optional(Type.String({ description: "A single task" })),
+  label: Type.Optional(Type.String({ description: "Short name for a single task; omit to derive from the task" })),
   tasks: Type.Optional(Type.Array(TaskItem, { description: "Parallel tasks (up to 8, 4 at a time)" })),
   chain: Type.Optional(Type.Array(TaskItem, { description: "Sequential steps; {previous} in a task is replaced by the previous step's output" })),
   async: Type.Optional(Type.Boolean({ description: "Return at once and deliver results as messages when done (default false)" })),
   context: Type.Optional(Type.Union([Type.Literal("fresh"), Type.Literal("fork")], { description: "fresh (default) or fork this conversation" })),
-  worktree: Type.Optional(Type.Boolean({ description: "Run each task in a new git worktree (default false)" })),
+  worktree: Type.Optional(Type.Boolean({ description: "Run each task in a new git worktree, only when the user requests a worktree or branch isolation; otherwise ask (default false)" })),
   cwd: Type.Optional(Type.String({ description: "Working directory (default: the session's)" })),
   model: Type.Optional(Type.String({ description: "provider/model for a single task" })),
   thinking: Type.Optional(Type.String({ description: "Thinking level for a single task" })),
@@ -85,12 +88,13 @@ const Params = Type.Object({
   message: Type.Optional(Type.String({ description: "Steering message for steer" })),
 });
 
-type Item = { agent?: string; task: string; cwd?: string; model?: string; thinking?: string };
+type Item = { agent?: string; task: string; label?: string; cwd?: string; model?: string; thinking?: string };
 
 export interface RunView {
   id: string;
   agent: string;
   task: string;
+  label?: string;
   model: string;
   thinking: string;
   byJev: Resolved["byJev"];
@@ -114,7 +118,8 @@ function view(run: Run, withOutput = false): RunView {
   return {
     id: run.id,
     agent: run.agent,
-    task: clip(run.task, 300),
+    task: run.task,
+    label: runLabel(run),
     model: s.model ?? run.model,
     thinking: run.thinking,
     byJev: run.byJev,
@@ -151,6 +156,7 @@ export function recordedRun(v: RecordedRun): Run {
     id: v.id,
     agent: v.agent,
     task: v.task,
+    label: runLabel(v),
     model: v.model,
     thinking: v.thinking,
     byJev: v.byJev ?? { agent: false, model: false, thinking: false },
@@ -227,7 +233,7 @@ export default function subagents(pi: ExtensionAPI) {
     canBackground: () => detachers.has(run.id),
     stop: () => {
       run.child?.stop();
-      ui.notify(`Stopping subagent ${run.agent} (${run.id}).`, "info");
+      ui.notify(`Stopping subagent ${runLabel(run)} · ${run.agent} (${run.id}).`, "info");
     },
   });
   let boundUI: ExtensionContext["ui"] | undefined;
@@ -269,8 +275,8 @@ export default function subagents(pi: ExtensionAPI) {
       const ended = all.filter((r) => r.state.status !== "running").sort((a, b) => (b.state.endedAt ?? 0) - (a.state.endedAt ?? 0));
       return [...running, ...ended].map((r) => ({
         key: r.id,
-        label: r.agent,
-        detail: taskLine(r.task, 80),
+        label: runLabel(r),
+        detail: r.agent,
         status: runStatus(r),
         stats: `${r.state.status === "running" ? "" : `${r.state.status} · `}${formatElapsed(elapsedMs(r, now))} · ↓ ${formatCount(displayTokens(r.state.usage))} tokens`,
         startedAt: r.state.startedAt,
@@ -369,7 +375,7 @@ export default function subagents(pi: ExtensionAPI) {
     safely(() =>
       pi.events.emit("bg:external", {
         id: `subagent:${run.id}`,
-        label: `${run.agent}: ${taskLine(run.task, 60)}`,
+        label: `${runLabel(run)} · ${run.agent}`,
         state: !done ? "running" : run.state.status === "done" ? "done" : "failed",
         ...(done ? { summary: `${run.state.status} after ${elapsed}s${after}` } : {}),
       }),
@@ -405,9 +411,9 @@ export default function subagents(pi: ExtensionAPI) {
   };
 
   /** Forward a child's dialog (for example a tool gate's approval) to the parent's UI. */
-  const dialogFor = (ctx: ExtensionContext, agent: string) => async (request: DialogRequest): Promise<DialogAnswer> => {
+  const dialogFor = (ctx: ExtensionContext, agent: string, label: string) => async (request: DialogRequest): Promise<DialogAnswer> => {
     if (!ctx.hasUI) return undefined;
-    const title = `[subagent ${agent}] ${request.title ?? ""}`.trim();
+    const title = `[subagent ${label} · ${agent}] ${request.title ?? ""}`.trim();
     try {
       if (request.method === "select") {
         const value = await ctx.ui.select(title, request.options ?? []);
@@ -474,13 +480,14 @@ export default function subagents(pi: ExtensionAPI) {
         run.state = state;
         options.onUpdate();
       },
-      onDialog: dialogFor(ctx, resolved.agent.name),
+      onDialog: dialogFor(ctx, resolved.agent.name, taskLabel(item.task, item.label)),
       onMessage: transcriptWriter(transcriptPath(outputPath)),
     });
     const run: Run = {
       id,
       agent: resolved.agent.name,
       task: item.task,
+      label: taskLabel(item.task, item.label),
       model: resolved.model,
       thinking: resolved.thinking,
       byJev: resolved.byJev,
@@ -514,7 +521,7 @@ export default function subagents(pi: ExtensionAPI) {
 
   const resultText = (run: Run) => {
     const s = run.state;
-    const head = `[${run.agent} · ${s.model ?? run.model} · ${run.thinking} · ${s.status}${s.error ? `: ${clip(s.error, 300)}` : ""}]`;
+    const head = `[${runLabel(run)} · ${run.agent} · ${s.model ?? run.model} · ${run.thinking} · ${s.status}${s.error ? `: ${clip(s.error, 300)}` : ""}]`;
     return `${head}\n${truncateOutput(s.output || "(no output)", run.outputPath)}`;
   };
 
@@ -554,11 +561,14 @@ export default function subagents(pi: ExtensionAPI) {
     name: "subagent",
     label: "Subagent",
     description:
-      "Delegate tasks to subagents, each a separate Pi with its own context window. action=run (default): a single `task`, parallel `tasks`, or a `chain` whose steps can use {previous}. Omit agent, model, or thinking to let Jev choose them. `async: true` returns run ids at once and delivers each result as a message. action=status|steer|stop|result take `id` (steer also `message`).",
+      "Delegate report-back work to headless subagents by default, including long or multistep tasks; each is a separate Pi with its own context window. action=run (default): a single `task`, parallel `tasks`, or a `chain` whose steps can use {previous}. Omit agent, model, or thinking to let Jev choose them. `async: true` returns run ids at once and delivers each result as a message. action=status|steer|stop|result take `id` (steer also `message`).",
     promptSnippet: "Delegate self-contained tasks to subagents with their own context windows",
     promptGuidelines: [
+      "Use headless subagents by default for delegated work that returns a result to this session, even when long or multistep. Use an interactive Herdr child only when explicitly requested or for a clearly persistent human-led session or handoff.",
       "Give each subagent a complete, self-contained task: it cannot see this conversation unless context is fork.",
+      "Give each task a short descriptive label; omit it to derive one deterministically from the task.",
       "Use parallel tasks for independent work and a chain when a step needs the previous step's output.",
+      "Use worktree only when the user requests a worktree or branch isolation; otherwise ask first. An authorized worktree task remains a headless subagent.",
     ],
     parameters: Params,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -569,7 +579,7 @@ export default function subagents(pi: ExtensionAPI) {
       if (action !== "run") {
         if (action === "status" && !params.id) {
           const all = [...runs.values()];
-          const text = all.length ? all.map((r) => `${r.id}  ${r.state.status.padEnd(7)} ${r.agent}  ${clip(r.task.replace(/\s+/gu, " "), 80)}`).join("\n") : "No subagent runs in this session.";
+          const text = all.length ? all.map((r) => `${r.id}  ${r.state.status.padEnd(7)} ${runLabel(r)} · ${r.agent}`).join("\n") : "No subagent runs in this session.";
           return { content: [{ type: "text", text }], details: { mode: "single", runs: all.map((r) => view(r)) } as Details };
         }
         const run = findRun(params.id);
@@ -590,21 +600,23 @@ export default function subagents(pi: ExtensionAPI) {
           } catch {
             // still running or not written
           }
-          const text = `[${run.agent} · ${run.state.status}]\n${truncateOutput(output || "(no output yet)", run.outputPath)}`;
+          const text = `[${runLabel(run)} · ${run.agent} · ${run.state.status}]\n${truncateOutput(output || "(no output yet)", run.outputPath)}`;
           return { content: [{ type: "text", text }], details: { mode: "single", runs: [view(run, true)] } as Details };
         }
         return { content: [{ type: "text", text: JSON.stringify(view(run, true), null, 2) }], details: { mode: "single", runs: [view(run, true)] } as Details };
       }
 
       const mode: Details["mode"] = params.tasks?.length ? "parallel" : params.chain?.length ? "chain" : "single";
-      const items: Item[] =
+      const rawItems: Item[] =
         mode === "parallel"
           ? (params.tasks as Item[])
           : mode === "chain"
             ? (params.chain as Item[])
             : params.task
-              ? [{ task: params.task, ...(params.agent ? { agent: params.agent } : {}), ...(params.model ? { model: params.model } : {}), ...(params.thinking ? { thinking: params.thinking } : {}) }]
+              ? [{ task: params.task, ...(params.label ? { label: params.label } : {}), ...(params.agent ? { agent: params.agent } : {}), ...(params.model ? { model: params.model } : {}), ...(params.thinking ? { thinking: params.thinking } : {}) }]
               : [];
+      // Resolve names before chain expansion: previous output must never rename a step.
+      const items = rawItems.map((item) => ({ ...item, label: taskLabel(item.task, item.label) }));
       if (!items.length) throw new Error("run needs `task`, `tasks`, or `chain`.");
       if (mode === "parallel" && items.length > config.maxParallel) throw new Error(`At most ${config.maxParallel} parallel tasks.`);
       const fork = params.context === "fork" ? ctx.sessionManager.getSessionFile() : undefined;
@@ -705,7 +717,7 @@ export default function subagents(pi: ExtensionAPI) {
           });
       };
 
-      const ids = () => started.map((r) => `${r.id} (${r.agent}, ${r.model}, ${r.thinking})`).join(", ");
+      const ids = () => started.map((r) => `${r.id} (${runLabel(r)} · ${r.agent}, ${r.model}, ${r.thinking})`).join(", ");
 
       if (call.async) {
         deliverLater(execute());
@@ -754,7 +766,7 @@ export default function subagents(pi: ExtensionAPI) {
     },
 
     renderCall(args, theme) {
-      const a = args as { action?: string; agent?: string; task?: string; tasks?: unknown[]; chain?: unknown[]; async?: boolean; id?: string };
+      const a = args as { action?: string; agent?: string; task?: string; label?: string; tasks?: unknown[]; chain?: unknown[]; async?: boolean; id?: string };
       const action = a.action ?? "run";
       const what =
         action !== "run"
@@ -763,7 +775,7 @@ export default function subagents(pi: ExtensionAPI) {
             ? `${a.tasks.length} parallel tasks`
             : a.chain?.length
               ? `chain of ${a.chain.length}`
-              : `${a.agent ?? "auto"}: ${clip((a.task ?? "").replace(/\s+/gu, " "), 80)}`;
+              : `${taskLabel(a.task ?? "", a.label)} · ${a.agent ?? "auto"}`;
       return new Text(`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("muted", what)}${a.async ? theme.fg("dim", " (async)") : ""}`, 0, 0);
     },
 
@@ -779,7 +791,7 @@ export default function subagents(pi: ExtensionAPI) {
       const lines: string[] = [];
       for (const r of d.runs) {
         lines.push(
-          `${icon(r.status)} ${theme.fg("accent", r.agent)}${jev(r.byJev.agent)} ${theme.fg("muted", "·")} ${r.model}${jev(r.byJev.model)} ${theme.fg("muted", "·")} ${r.thinking}${jev(r.byJev.thinking)} ${theme.fg("dim", `· ${r.seconds}s · ${r.turns} turns${r.cost ? ` · $${r.cost.toFixed(3)}` : ""} · ${r.id}`)}`,
+          `${icon(r.status)} ${theme.fg("accent", runLabel(r))} ${theme.fg("muted", `· ${r.agent}`)}${jev(r.byJev.agent)} ${theme.fg("muted", "·")} ${r.model}${jev(r.byJev.model)} ${theme.fg("muted", "·")} ${r.thinking}${jev(r.byJev.thinking)} ${theme.fg("dim", `· ${r.seconds}s · ${r.turns} turns${r.cost ? ` · $${r.cost.toFixed(3)}` : ""} · ${r.id}`)}`,
         );
         if (r.status === "running" && r.activity) lines.push(`  ${theme.fg("dim", r.activity)}`);
         if (r.error) lines.push(`  ${theme.fg("error", clip(r.error, 200))}`);
@@ -809,15 +821,15 @@ export default function subagents(pi: ExtensionAPI) {
         const running = [...runs.values()].filter((r) => r.child && r.state.status === "running");
         const chosen = target === "all" || (!target && running.length === 1) ? running : target ? running.filter((r) => r.id.startsWith(target)) : [];
         if (!chosen.length) {
-          const which = running.map((r) => `${r.id} ${r.agent}`).join(", ");
+          const which = running.map((r) => `${r.id} ${runLabel(r)} · ${r.agent}`).join(", ");
           ctx.ui.notify(!running.length ? "No subagents are running." : target ? `No running run matches "${target}". Running: ${which}.` : `Say which: /subagents stop <id> or all. Running: ${which}.`, "info");
           return;
         }
         for (const r of chosen) r.child?.stop();
-        ctx.ui.notify(`Stopping ${chosen.map((r) => `${r.agent} (${r.id})`).join(", ")}.`, "info");
+        ctx.ui.notify(`Stopping ${chosen.map((r) => `${runLabel(r)} · ${r.agent} (${r.id})`).join(", ")}.`, "info");
         return;
       }
-      const label = (r: RunView) => `${r.id}  ${r.status.padEnd(7)} ${r.agent} · ${r.model} · ${r.thinking}  ${clip(r.task.replace(/\s+/gu, " "), 60)}`;
+      const label = (r: RunView) => `${r.id}  ${r.status.padEnd(7)} ${runLabel(r)} · ${r.agent} · ${r.model} · ${r.thinking}`;
       let list = allRuns(ctx);
       if (!list.length) {
         ctx.ui.notify("No subagent runs in this session.", "info");

@@ -38,10 +38,11 @@ test("the viewer frames the header, the conversation and the live activity", () 
   const lines = v.render(80);
   // The whole screen (40 rows), under a banner that says it is not the main session.
   expect(lines).toHaveLength(40);
-  expect(lines[0]).toContain("◀ esc · Subagent scout · not your main session");
+  expect(lines[0]).toContain("◀ esc · Find where");
   expect(lines.every((l) => visibleWidth(l) === 80)).toBe(true);
+  expect(lines[0]).toContain("scout · not your main session");
   const out = text(lines);
-  expect(out).toContain("│ ● scout  Find where the config is loaded · ↻1 · 0s");
+  expect(out).toContain("│ ● Find where the config is loaded  scout · ↻1 · 0s");
   expect(out).toContain("↳ anthropic/claude-haiku-5 (Jev) · low · async · r");
   expect(out).toMatch(/\[User\][^]*Find where the config is loaded[^]*\[Assistant\][^]*Looking with rg\.[^]*▸ bash: rg loadConfig[^]*\[Result: bash\][^]*src\/config\.ts:8/u);
   expect(out).toContain("▍ read: src/config.ts");
@@ -128,7 +129,7 @@ test("a finished run offers no steer or stop and shows how it ended", () => {
   run.conversation.close();
   const { v, calls } = viewer(run);
   const out = text(v.render(80));
-  expect(out).toContain("✗ scout");
+  expect(out).toContain("✗ Find where the config is loaded  scout");
   expect(out).toContain("failed: pi exited (1)");
   expect(out).not.toContain("Enter steer");
   expect(out).not.toContain("▍");

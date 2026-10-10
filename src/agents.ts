@@ -26,6 +26,24 @@ export const GENERAL: AgentDef = {
   source: "builtin",
 };
 
+export const EXPLORER: AgentDef = {
+  name: "explorer",
+  description: "Codebase exploration without changes: locate files, trace behavior, and return concise findings with references",
+  tools: ["read", "grep", "find", "ls", "bash"],
+  prompt: "You are a codebase explorer. Locate the relevant files and symbols, trace actual behavior, and return concise findings with file paths and line references. Distinguish evidence from assumptions and identify anything unresolved. Do not implement fixes or modify files. Use bash only for inspection, never for commands that change files or repository state. Your no-change policy is an instruction, not a filesystem sandbox.",
+  source: "builtin",
+};
+
+export const REVIEWER: AgentDef = {
+  name: "reviewer",
+  description: "Independent review of changes for actionable bugs, regressions, security risks, and test gaps; report evidence without implementing fixes",
+  tools: ["read", "grep", "find", "ls", "bash"],
+  prompt: "You are an independent code reviewer. Inspect the requested changes and surrounding execution paths for actionable bugs, regressions, security risks, and missing tests. Prioritize concrete correctness issues over stylistic preferences. For each finding, give severity, a file and line reference, the failing scenario, and supporting evidence. Distinguish confirmed issues from uncertainty; say explicitly when no actionable issues were found. Do not implement fixes or modify files. Use bash only for inspection, never for commands that change files or repository state. Your no-change policy is an instruction, not a filesystem sandbox.",
+  source: "builtin",
+};
+
+export const BUILTIN_AGENTS: readonly AgentDef[] = [GENERAL, EXPLORER, REVIEWER];
+
 const THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 function list(value: unknown): string[] | undefined {
@@ -90,9 +108,9 @@ function projectAgentsDir(cwd: string): string | undefined {
   }
 }
 
-/** `general`, then `~/.pi/agent/agents/*.md`, then the nearest `<repo>/.pi/agents/*.md`; later names win. */
+/** Built-ins, then `~/.pi/agent/agents/*.md`, then the nearest `<repo>/.pi/agents/*.md`; later names win. */
 export function discoverAgents(cwd: string): AgentDef[] {
-  const byName = new Map<string, AgentDef>([[GENERAL.name, GENERAL]]);
+  const byName = new Map<string, AgentDef>(BUILTIN_AGENTS.map((agent) => [agent.name, agent]));
   for (const agent of loadDir(path.join(agentDir(), "agents"), "user")) byName.set(agent.name, agent);
   const project = projectAgentsDir(cwd);
   if (project) for (const agent of loadDir(project, "project")) byName.set(agent.name, agent);

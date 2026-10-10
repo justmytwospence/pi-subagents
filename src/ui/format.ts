@@ -1,6 +1,6 @@
 // Shared formatting for the subagent widget, FleetView and conversation viewer.
 // Adapted from tintinweb/pi-subagents (MIT): https://github.com/tintinweb/pi-subagents
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { ChildStatus } from "../child.ts";
 import { type Run, displayTokens } from "../run.ts";
 
@@ -88,6 +88,20 @@ export function rightAlign(left: string, right: string, width: number): string {
   const leftClamped = truncateToWidth(left, Math.max(0, width - rightWidth - 1));
   const gap = Math.max(1, width - visibleWidth(leftClamped) - rightWidth);
   return truncateToWidth(leftClamped + " ".repeat(gap) + right, width);
+}
+
+/** Wrap an identity without sacrificing task text to secondary metadata. */
+export function taskRows(prefix: string, identity: string, metadata: string, width: number, alignRight = false): string[] {
+  const left = prefix + identity;
+  if (visibleWidth(left) + visibleWidth(metadata) + 1 <= width) {
+    return [alignRight ? rightAlign(left, metadata, width) : `${left} ${metadata}`];
+  }
+  const indent = " ".repeat(visibleWidth(prefix));
+  const lines = wrapTextWithAnsi(identity, Math.max(1, width - visibleWidth(prefix))).map((line, i) =>
+    truncateToWidth((i === 0 ? prefix : indent) + line, width),
+  );
+  if (metadata) lines.push(alignRight ? rightAlign("", metadata, width) : truncateToWidth(indent + metadata, width));
+  return lines;
 }
 
 /** Restore a dim run after nested color resets, so `(Jev)` inside dim stats stays dim. */

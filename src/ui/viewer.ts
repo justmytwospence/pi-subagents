@@ -3,10 +3,11 @@
 // closes. It stays open when the run ends.
 // Adapted from tintinweb/pi-subagents (MIT): https://github.com/tintinweb/pi-subagents
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { runLabel } from "../label.ts";
 import { type Component, Input, Markdown, type MarkdownTheme, type TUI, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { type Message, describeActivity, describeTool, messageText } from "../conversation.ts";
 import type { Run } from "../run.ts";
-import { type Theme, dimAll, jev, modelAndEffort, runStats, statusIcon, taskLine } from "./format.ts";
+import { type Theme, dimAll, jev, modelAndEffort, runStats, statusIcon } from "./format.ts";
 
 /** Share of the terminal height the view takes: all of it, like Claude Code's and Codex's subagent views. */
 export const VIEWER_HEIGHT_PCT = 100;
@@ -212,9 +213,12 @@ export class ConversationViewer implements Component {
     const s = run.state;
 
     // A banner in the accent color says this is not the main session, and how to get back.
-    const label = ` ◀ esc · Subagent ${run.agent} · not your main session `;
+    const prefix = " ◀ esc · ";
+    const suffix = ` · ${truncateToWidth(run.agent, 20, "…")} · not your main session `;
+    const title = truncateToWidth(runLabel(run), Math.max(1, width - 3 - visibleWidth(prefix + suffix)), "…");
+    const label = `${prefix}${title}${suffix}`;
     const lines = [th.fg("accent", `╭─${th.bold(truncateToWidth(label, Math.max(4, width - 3)))}${"─".repeat(Math.max(0, width - 3 - visibleWidth(label)))}╮`)];
-    lines.push(row(`${statusIcon(s.status, th)} ${th.bold(run.agent)}${jev(run.byJev.agent, th)}  ${th.fg("muted", taskLine(run.task, 80))} ${th.fg("dim", "·")} ${th.fg("dim", runStats(run))}`));
+    lines.push(row(`${statusIcon(s.status, th)} ${th.bold(runLabel(run))}  ${th.fg("muted", run.agent)}${jev(run.byJev.agent, th)} ${th.fg("dim", "·")} ${th.fg("dim", runStats(run))}`));
     const status = s.status === "running" ? "" : ` · ${s.status}`;
     lines.push(row(dimAll(`  ↳ ${modelAndEffort(run, th, true)} · ${run.async ? "async" : "sync"} · ${run.id}${status}`, th)));
     lines.push(rule);

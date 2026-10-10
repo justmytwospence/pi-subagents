@@ -9,15 +9,28 @@ open, [Jev](https://docs.typesafe.ai) (through Pi's own classifier models,
 
 `action: "run"` (the default) takes one of:
 
-- `task` (with optional `agent`, `model`, `thinking`): a single task;
-- `tasks: [{ agent?, task, cwd?, model?, thinking? }]`: up to 8 in parallel, 4 at a time;
+- `task` (with optional `label`, `agent`, `model`, `thinking`): a single task;
+- `tasks: [{ label?, agent?, task, cwd?, model?, thinking? }]`: up to 8 in parallel, 4 at a time;
 - `chain: [...]`: steps in order; `{previous}` in a step's task is replaced by the previous output,
   and the chain stops at the first failed step.
+
+Use headless subagents by default for delegated work that reports back to the parent, even when
+long or multistep. An interactive Herdr child is for an explicit request or a clearly persistent,
+human-led session or handoff.
+
+`label` is a short task name, not an agent role (for example, `"Audit cache invalidation"` with
+`agent: "reviewer"`). Lists, headings and forwarded approval dialogs show the task name first and the role second. Labels are
+whitespace-normalized and stripped of terminal controls, without a fixed length cap. FleetView and
+widget descriptions use the available width and wrap when necessary instead of dropping task text. A missing
+or blank label uses the task’s first nonempty line (without a Markdown heading/list prefix), without
+any model call. Each chain step gets its own stable label before `{previous}` is expanded. The full
+task is still sent to the child and saved in run records; older records derive a label when opened.
 
 Options: `async` (default false) returns the run ids at once and delivers the results as a
 `subagent-result` message that starts a turn; `context: "fork"` starts children from this
 conversation (`--fork` of the session file) instead of fresh; `worktree: true` runs each task in a
-new checkout from `worktree new subagent/<slug>-<id> --no-open`; `cwd`.
+new checkout from `worktree new subagent/<slug>-<id> --no-open`; `cwd`. Set `worktree` only when the
+user requests a worktree or branch isolation; otherwise ask first. The child remains headless.
 
 `action: "status" | "steer" | "stop" | "result"` take an `id` (or unique prefix); `steer` also takes
 `message`, delivered to the running child as a steering message. `status` without an id lists runs.
@@ -25,7 +38,7 @@ new checkout from `worktree new subagent/<slug>-<id> --no-open`; `cwd`.
 The result is each child's final reply, cut to 2,000 lines or 50 KB, with the full text in
 `~/.pi/agent/subagents/<id>/output.md`. Each finished message of the child's conversation is
 appended to `messages.jsonl` beside it. The children's token usage and cost are added to the tool
-result, so they count in the session totals. The tool row shows each run's agent, model, effort
+result, so they count in the session totals. The tool row shows each run's task label, agent role, model, effort
 (marked "(Jev)" where Jev chose), status, time, turns, cost, and current activity.
 
 Dialogs a child's extensions open (for example a tool gate asking for approval) are forwarded to
@@ -50,14 +63,14 @@ in Claude Code (2.1.296):
   message another extension sends does not count), or `x` dismisses it.
   A run whose conversation is open stays until you close it. Selection and stop-arming follow the
   row, not its position, so rows coming and going never move them onto another run.
-- **Conversation viewer**, full screen under an accent-colored banner (`◀ esc · Subagent scout ·
+- **Conversation viewer**, full screen under an accent-colored banner (`◀ esc · Find config · scout ·
   not your main session`), as in Claude Code and Codex: the child's conversation as it streams, with tool calls,
   results, live tool output, queued steering messages and current activity. It follows new output
   until you scroll up (`↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`). `Enter` opens a composer that steers
   the child, `x` twice stops it, `b` moves a foreground run to the background, `m` cycles Markdown rendering (assistant text, tool results too,
   or none), and `Esc` or `q` closes the viewer. It stays open when the run ends.
 - **Widget** above the editor, off by default (Claude Code has none): `"widget": "background"` (async
-  runs) or `"all"` turns it on. One row per running subagent with a spinner, the agent, its task,
+  runs) or `"all"` turns it on. One row per running subagent with a spinner, the task label and agent role,
   model and effort (Jev's picks marked "(Jev)"), turns, tokens, cost and elapsed time, and its
   current tool or text beneath; queued tasks; a finished run for 8 seconds, a failed or stopped one
   until your next message (several sharing one row). Double-click a row (fullscreen mode) to open
@@ -87,7 +100,8 @@ copied into both repos):
   pi-marimo's notebooks work the same way: FleetView ends with their pill (`1 notebook`) too, and
   Enter on it opens the busiest notebook full screen.
 - **One list.** pi-bg's `/tasks` view lists this session's runs mixed in with its shells, tagged `agent`: Enter opens a
-  run's conversation, `x` twice stops it, `x` on an ended one dismisses it.
+  run's conversation, `x` twice stops it, `x` on an ended one dismisses it. Task labels are primary;
+  agent roles are secondary.
 - **Waiting on async runs.** Each async run is outside work pi-bg's `bg_wait subagent:<id>` can
   wait on inside the turn, so the agent shows as working (in pi, herdr and tmux) until the run
   ends; the async result names the ids. A chain's steps say the chain goes on. The result still
@@ -95,8 +109,18 @@ copied into both repos):
 
 ## Agents
 
-`~/.pi/agent/agents/*.md` and the nearest `<project>/.pi/agents/*.md` (project files win), plus a
-built-in `general`:
+Built-in roles work without any agent files:
+
+- `general`: unrestricted general-purpose delegation;
+- `explorer`: reconnaissance without changes, returning relevant files and how they fit together;
+- `reviewer`: review without changes for bugs, regressions, missing tests and risks.
+
+`explorer` and `reviewer` have `read`, `grep`, `find`, `ls` and `bash`, but no pinned model or effort;
+Jev or the usual defaults choose those. Their no-change instructions are not a sandbox: `bash`
+can still modify files. Task labels identify the work; these names identify the role.
+
+`~/.pi/agent/agents/*.md` and the nearest `<project>/.pi/agents/*.md` customize the roles
+(project files win, and agent files can override built-ins):
 
 ```markdown
 ---

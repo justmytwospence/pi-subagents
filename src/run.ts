@@ -8,6 +8,8 @@ export interface Run {
   id: string;
   agent: string;
   task: string;
+  /** Short task name; optional for records from before labels existed. */
+  label?: string;
   model: string;
   thinking: string;
   byJev: Resolved["byJev"];

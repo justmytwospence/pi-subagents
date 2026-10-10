@@ -13,8 +13,9 @@
 import { type TUI, isKeyRelease, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import { type ActivityPill, type ActivitySection, leavesPromptDown } from "../activity.ts";
 import type { Run } from "../run.ts";
+import { runLabel } from "../label.ts";
 import { displayTokens } from "../run.ts";
-import { type Theme, elapsedMs, formatCost, formatCount, formatElapsed, rightAlign, statusIcon, taskLine } from "./format.ts";
+import { type Theme, elapsedMs, formatCost, formatCount, formatElapsed, rightAlign, statusIcon, taskRows } from "./format.ts";
 import { type ViewerActions, type ViewerUI, openViewer } from "./viewer.ts";
 
 const FLEET_KEY = "subagents-fleet";
@@ -91,7 +92,7 @@ export function renderFleet({ roster, selected, active, stopArmed, canBackground
     const hint = !active
       ? theme.fg("dim", "↓ or ← for subagents")
       : stopArmed && stoppable
-        ? theme.fg("error", `x again to stop ${chosen.run.agent}`)
+        ? theme.fg("error", `x again to stop ${runLabel(chosen.run)}`)
         : chosen?.kind === "pill"
           ? theme.fg("dim", "j/k select · l/enter view · h/esc back")
           : theme.fg(
@@ -109,11 +110,12 @@ export function renderFleet({ roster, selected, active, stopArmed, canBackground
       const run = runs[i];
       if (!run) continue;
       const on = active && i + 1 === sel;
-      const left = ` ${bullet(i + 1)} ${on ? theme.bold(theme.fg("text", run.agent)) : theme.fg("muted", run.agent)}  ${on ? theme.fg("text", taskLine(run.task, 60)) : taskLine(run.task, 60)}`;
+      const prefix = ` ${bullet(i + 1)} `;
+      const identity = `${on ? theme.bold(theme.fg("text", runLabel(run))) : theme.fg("muted", runLabel(run))}  ${theme.fg("dim", run.agent)}`;
       const cost = formatCost(run.state.usage.cost.total);
       const stats = `${formatElapsed(elapsedMs(run, now))} · ↓ ${formatCount(displayTokens(run.state.usage))} tokens${cost ? ` · ${cost}` : ""}`;
       const done = run.state.status === "running" ? "" : `${statusIcon(run.state.status, theme)} `;
-      lines.push(rightAlign(left, done + theme.fg(on ? "text" : "dim", stats), width));
+      lines.push(...taskRows(prefix, identity, done + theme.fg(on ? "text" : "dim", stats), width, true));
     }
     const below = runs.length - (start + visible);
     if (below > 0) lines.push(rightAlign("", theme.fg("dim", `↓ ${below} more`), width));

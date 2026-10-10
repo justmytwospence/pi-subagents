@@ -1,4 +1,4 @@
-// The live subagent widget above the editor: one row per running subagent (spinner, agent, task,
+// The live subagent widget above the editor: one row per running subagent (spinner, task label, role,
 // model and effort, turns, tokens, cost, elapsed) with its current activity beneath, then finished
 // runs for a few seconds with a status icon. It registers once and refreshes with requestRender(),
 // like rpiv-todo's Todos widget, and hides itself when nothing is left to show. Double-clicking a
@@ -8,10 +8,11 @@
 // (FleetView); `"widget": "background"` or `"all"` in the settings brings this one back.
 // Adapted from tintinweb/pi-subagents (MIT): https://github.com/tintinweb/pi-subagents
 import type { TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { describeActivity } from "../conversation.ts";
 import type { Run } from "../run.ts";
-import { type Theme, SPINNER, dimAll, jev, modelAndEffort, runStats, statusIcon, taskLine } from "./format.ts";
+import { runLabel } from "../label.ts";
+import { type Theme, SPINNER, dimAll, jev, modelAndEffort, runStats, statusIcon, taskLine, taskRows } from "./format.ts";
 
 export type WidgetMode = "background" | "all" | "off";
 export const WIDGET_MODES: readonly WidgetMode[] = ["background", "all", "off"];
@@ -69,34 +70,36 @@ export function renderSection({ runs, queued, now, frame, width, theme, maxLines
   const color = active ? "accent" : "dim";
   const spinner = SPINNER[frame % SPINNER.length] ?? "●";
 
+  const identityRows = (prefix: string, identity: string, metadata: string) =>
+    visibleWidth(prefix + identity) <= width ? [cut(`${prefix}${identity} ${metadata}`)] : taskRows(prefix, identity, metadata, width);
   const runningRows = running.map((r) => [
-    cut(`${theme.fg("dim", "├─")} ${theme.fg("accent", spinner)} ${theme.bold(r.agent)}${jev(r.byJev.agent, theme)}  ${theme.fg("muted", taskLine(r.task))} ${theme.fg("dim", "·")} ${dimAll(`${modelAndEffort(r, theme)} · ${runStats(r, now)}`, theme)}`),
+    ...identityRows(`${theme.fg("dim", "├─")} ${theme.fg("accent", spinner)} `, `${theme.bold(runLabel(r))}  ${theme.fg("muted", r.agent)}${jev(r.byJev.agent, theme)}`, `${theme.fg("dim", "·")} ${dimAll(`${modelAndEffort(r, theme)} · ${runStats(r, now)}`, theme)}`),
     cut(theme.fg("dim", `│    ⎿  ${describeActivity(r.conversation)}`)),
   ]);
   const finishedRows = finished.map((r) => {
     const s = r.state;
     const note = s.status === "failed" ? theme.fg("error", ` failed${s.error ? `: ${taskLine(s.error, 60)}` : ""}`) : s.status === "stopped" ? theme.fg("muted", " stopped") : "";
     const more = r === latest && moreEnded > 0 ? theme.fg("dim", ` · +${moreEnded} more ended`) : "";
-    return cut(`${theme.fg("dim", "├─")} ${statusIcon(s.status, theme)} ${theme.fg("muted", r.agent)}  ${theme.fg("dim", `${taskLine(r.task)} · ${runStats(r, now)}`)}${note}${more}`);
+    return identityRows(`${theme.fg("dim", "├─")} ${statusIcon(s.status, theme)} `, `${theme.fg("muted", runLabel(r))}  ${theme.fg("dim", r.agent)}`, `${theme.fg("dim", `· ${runStats(r, now)}`)}${note}${more}`);
   });
   const queuedRow = queued ? cut(`${theme.fg("dim", "├─")} ${theme.fg("muted", "◦")} ${theme.fg("dim", `${queued} queued`)}`) : undefined;
 
   const counts = [running.length ? `${running.length} running` : "", queued ? `${queued} queued` : ""].filter(Boolean).join(", ");
   const lines = [cut(`${theme.fg(color, active ? "●" : "○")} ${theme.fg(color, "Subagents")}${counts ? theme.fg("dim", `  ${counts}`) : ""}`)];
   const targets: (string | undefined)[] = [undefined];
-  const body = runningRows.length * 2 + (queuedRow ? 1 : 0) + finishedRows.length;
+  const body = runningRows.reduce((n, rows) => n + rows.length, 0) + (queuedRow ? 1 : 0) + finishedRows.reduce((n, rows) => n + rows.length, 0);
   if (body <= max - 1) {
     running.forEach((r, i) => {
       lines.push(...(runningRows[i] as string[]));
-      targets.push(r.id, r.id);
+      targets.push(...runningRows[i]!.map(() => r.id));
     });
     if (queuedRow) {
       lines.push(queuedRow);
       targets.push(undefined);
     }
     finished.forEach((r, i) => {
-      lines.push(finishedRows[i] as string);
-      targets.push(r.id);
+      lines.push(...finishedRows[i]!);
+      targets.push(...finishedRows[i]!.map(() => r.id));
     });
     closeTree(lines, !queuedRow && !finishedRows.length && runningRows.length > 0);
     return { lines, targets };
@@ -106,10 +109,12 @@ export function renderSection({ runs, queued, now, frame, width, theme, maxLines
   let hiddenRunning = 0;
   let hiddenFinished = 0;
   running.forEach((r, i) => {
-    if (budget >= 2) {
-      lines.push(...(runningRows[i] as string[]));
-      targets.push(r.id, r.id);
-      budget -= 2;
+    const rows = runningRows[i]!;
+    // Keep at least the first task intact; the row limit is a soft cap for a wrapped description.
+    if (budget >= rows.length || lines.length === 1) {
+      lines.push(...rows);
+      targets.push(...rows.map(() => r.id));
+      budget -= rows.length;
     } else hiddenRunning++;
   });
   if (queuedRow) {
@@ -117,15 +122,18 @@ export function renderSection({ runs, queued, now, frame, width, theme, maxLines
     targets.push(undefined);
   }
   finished.forEach((r, i) => {
-    if (budget >= 1) {
-      lines.push(finishedRows[i] as string);
-      targets.push(r.id);
-      budget--;
+    const rows = finishedRows[i]!;
+    if (budget >= rows.length || lines.length === 1) {
+      lines.push(...rows);
+      targets.push(...rows.map(() => r.id));
+      budget -= rows.length;
     } else hiddenFinished++;
   });
-  const hidden = [hiddenRunning ? `${hiddenRunning} running` : "", hiddenFinished ? `${hiddenFinished} finished` : ""].filter(Boolean).join(", ");
-  lines.push(cut(`${theme.fg("dim", "└─")} ${theme.fg("dim", `+${hiddenRunning + hiddenFinished} more (${hidden})`)}`));
-  targets.push(undefined);
+  if (hiddenRunning || hiddenFinished) {
+    const hidden = [hiddenRunning ? `${hiddenRunning} running` : "", hiddenFinished ? `${hiddenFinished} finished` : ""].filter(Boolean).join(", ");
+    lines.push(cut(`${theme.fg("dim", "└─")} ${theme.fg("dim", `+${hiddenRunning + hiddenFinished} more (${hidden})`)}`));
+    targets.push(undefined);
+  } else closeTree(lines, !queuedRow && !finishedRows.length && runningRows.length > 0);
   return { lines, targets };
 }
 
@@ -144,10 +152,9 @@ function withSpacer(lines: string[]): string[] {
 function closeTree(lines: string[], lastIsRunning: boolean) {
   const last = lines.length - 1;
   if (last < 1) return;
-  if (lastIsRunning && last >= 2) {
-    lines[last - 1] = (lines[last - 1] ?? "").replace("├─", "└─");
-    lines[last] = (lines[last] ?? "").replace("│  ", "   ");
-  } else lines[last] = (lines[last] ?? "").replace("├─", "└─");
+  const branch = lines.findLastIndex((line) => line.includes("├─"));
+  if (branch >= 1) lines[branch] = lines[branch]!.replace("├─", "└─");
+  if (lastIsRunning) lines[last] = (lines[last] ?? "").replace("│  ", "   ");
 }
 
 /** The part of `ctx.ui` the widget uses. */

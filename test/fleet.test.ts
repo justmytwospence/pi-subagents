@@ -34,14 +34,14 @@ test("rows: the selection, stats flush right, a status icon once finished, and s
   const idle = renderFleet({ roster, selected: 0, active: false, now: 60_000, width: 80, theme: plain });
   expect(idle).toHaveLength(5);
   expect(idle.slice(0, 2)).toEqual([" ↓ or ← for subagents", " ○ main"]);
-  expect(idle[2]).toMatch(/^ ○ scout {2}Find where the config is loaded +1m00s · ↓ 13\.1k tokens$/u);
-  expect(idle[3]).toMatch(/^ ○ reviewer {2}Review the diff +✗ 52s · ↓ 0 tokens$/u);
+  expect(idle[2]).toMatch(/^ ○ Find where the config is loaded {2}scout +1m00s · ↓ 13\.1k tokens$/u);
+  expect(idle[3]).toMatch(/^ ○ Review the diff {2}reviewer +✗ 52s · ↓ 0 tokens$/u);
   expect(idle[4]).toBe("");
   expect(idle.slice(2, 4).map(visibleWidth)).toEqual([80, 80]);
   const active = renderFleet({ roster, selected: 2, active: true, now: 60_000, width: 80, theme: plain });
   expect(active[0]).toContain("j/k select · l/enter view · x dismiss · h/esc back");
   expect(active[1]).toBe(" ○ main");
-  expect(active[3]).toMatch(/^ ● reviewer/u);
+  expect(active[3]).toMatch(/^ ● Review the diff {2}reviewer/u);
   // A pill, and the note after a success.
   const shells = { id: "bg", title: "shells", entries: () => [], open: async () => undefined, pill: () => ({ label: "2 shells", alert: "1 failed" }) };
   const withPill = fleetRoster([a], 60_000, undefined, [shells]);
@@ -52,18 +52,18 @@ test("rows: the selection, stats flush right, a status icon once finished, and s
   ]);
   expect(renderFleet({ roster: fleetRoster([], 0, undefined, [shells]), selected: 0, active: false, now: 0, width: 80, theme: plain })).toEqual([" 2 shells  · 1 failed", ""]);
 
-  const many = fleetRoster(Array.from({ length: 8 }, (_, i) => fakeRun({ agent: `a${i}`, state: { startedAt: i } })), 0);
+  const many = fleetRoster(Array.from({ length: 8 }, (_, i) => fakeRun({ agent: `a${i}`, label: `Task ${i}`, state: { startedAt: i } })), 0);
   const top = renderFleet({ roster: many, selected: 0, active: true, now: 0, width: 60, theme: plain });
   expect(top.at(-2)?.trim()).toBe("↓ 3 more");
   const bottom = renderFleet({ roster: many, selected: 8, active: true, now: 0, width: 60, theme: plain });
   expect(bottom[2]?.trim()).toBe("↑ 3 more");
-  expect(bottom.some((l) => l.includes("● a7"))).toBe(true);
+  expect(bottom.some((l) => l.includes("● Task 7  a7"))).toBe(true);
   expect(renderFleet({ roster: [], selected: 0, active: false, now: 0, width: 60, theme: plain })).toEqual([]);
 });
 
 function setup() {
   const ui = fakeUI();
-  const runs = [fakeRun({ agent: "scout", child: {} as never, state: { startedAt: Date.now() } }), fakeRun({ agent: "worker", child: {} as never, state: { startedAt: Date.now() + 1 } })];
+  const runs = [fakeRun({ agent: "scout", label: "Find config", child: {} as never, state: { startedAt: Date.now() } }), fakeRun({ agent: "worker", label: "Fix config", child: {} as never, state: { startedAt: Date.now() + 1 } })];
   let enabled = true;
   const steered: string[] = [];
   const stopped: string[] = [];
@@ -81,10 +81,10 @@ test("↓ at an empty prompt enters the list; arrows select; Esc or ↑ past mai
   ui.editorText = "";
   expect(ui.press(KEY.down)).toBe(true);
   expect(ui.render("subagents-fleet")[0]).toContain("j/k select");
-  expect(ui.render("subagents-fleet")[2]).toMatch(/● scout/u);
+  expect(ui.render("subagents-fleet")[2]).toMatch(/● Find config {2}scout/u);
   expect(ui.press(KEY.down)).toBe(true);
   expect(ui.press(KEY.down)).toBe(true);
-  expect(ui.render("subagents-fleet")[3]).toMatch(/● worker/u);
+  expect(ui.render("subagents-fleet")[3]).toMatch(/● Fix config {2}worker/u);
   expect(ui.press(KEY.up)).toBe(true);
   expect(ui.press(KEY.up)).toBe(true);
   expect(ui.render("subagents-fleet")[1]).toBe(" ● main");
@@ -144,7 +144,7 @@ test("x twice stops the selected run; any other key disarms; x on main goes to t
   ui.press(KEY.down);
   expect(ui.render("subagents-fleet")[0]).toContain("l/enter view · x stop · h/esc back");
   expect(ui.press("x")).toBe(true);
-  expect(ui.render("subagents-fleet")[0]).toContain("x again to stop scout");
+  expect(ui.render("subagents-fleet")[0]).toContain("x again to stop Find config");
   expect(ui.press(KEY.down)).toBe(true);
   expect(ui.press("x")).toBe(true);
   expect(stopped).toEqual([]);
@@ -160,14 +160,14 @@ test("stop arming follows the row: if it leaves, the second x does not stop the 
   const { ui, runs, fleet, stopped } = setup();
   ui.press(KEY.down);
   expect(ui.press("x")).toBe(true);
-  expect(ui.render("subagents-fleet")[0]).toContain("x again to stop scout");
+  expect(ui.render("subagents-fleet")[0]).toContain("x again to stop Find config");
   // scout ends (a success leaves the list); worker moves up under the cursor.
   runs[0]!.state = { ...runs[0]!.state, status: "done", endedAt: Date.now() };
   fleet.update();
   expect(ui.render("subagents-fleet")[0]).not.toContain("x again");
   expect(ui.press("x")).toBe(true);
   expect(stopped).toEqual([]);
-  expect(ui.render("subagents-fleet")[0]).toContain("x again to stop worker");
+  expect(ui.render("subagents-fleet")[0]).toContain("x again to stop Fix config");
   fleet.dispose();
 });
 
@@ -257,7 +257,7 @@ test("↓ leaves a draft for the list once the cursor is at its end; vim's j doe
   expect(ui.press(KEY.down)).toBe(false);
   editor.cursor = { line: 0, col: 7 };
   expect(ui.press(KEY.down)).toBe(true);
-  expect(ui.render("subagents-fleet")[2]).toMatch(/● scout/u);
+  expect(ui.render("subagents-fleet")[2]).toMatch(/● Find config {2}scout/u);
   // h goes back; ← with a draft stays in the editor.
   expect(ui.press("h")).toBe(true);
   expect(ui.press(KEY.left)).toBe(false);
@@ -267,9 +267,9 @@ test("↓ leaves a draft for the list once the cursor is at its end; vim's j doe
   editor.cursor = { line: 0, col: 6 };
   expect(ui.press("j")).toBe(true);
   expect(ui.press("j")).toBe(true);
-  expect(ui.render("subagents-fleet")[3]).toMatch(/● worker/u);
+  expect(ui.render("subagents-fleet")[3]).toMatch(/● Fix config {2}worker/u);
   expect(ui.press("k")).toBe(true);
-  expect(ui.render("subagents-fleet")[2]).toMatch(/● scout/u);
+  expect(ui.render("subagents-fleet")[2]).toMatch(/● Find config {2}scout/u);
   expect(ui.press("l")).toBe(true);
   expect(ui.customs).toHaveLength(1);
   fleet.dispose();

@@ -30,7 +30,7 @@ test("a running row: spinner, agent, Jev marks, model, effort, stats; activity b
   const lines = renderWidget({ runs: [r], queued: 0, now: 14_200, frame: 1, width: 200, theme: plain });
   expect(lines).toEqual([
     "● Subagents  1 running",
-    "└─ ⠙ scout (Jev)  Find where the config is loaded · claude-haiku-5 · low (Jev) · ↻3 · 12.3k tokens · $0.012 · 14s",
+    "└─ ⠙ Find where the config is loaded  scout (Jev) · claude-haiku-5 · low (Jev) · ↻3 · 12.3k tokens · $0.012 · 14s",
     "     ⎿  bash: npm test",
     "",
   ]);
@@ -45,9 +45,9 @@ test("finished rows show a status icon; the queue gets a row; nothing to show is
   expect(lines).toEqual([
     "● Subagents  2 queued",
     "├─ ◦ 2 queued",
-    "├─ ✓ reviewer  Find where the config is loaded · ↻5 · 52s",
+    "├─ ✓ Find where the config is loaded  reviewer · ↻5 · 52s",
     // Failures and stops share one row: the latest, with a count of the rest.
-    "└─ ✗ worker  Find where the config is loaded · 3s failed: pi exited (1) · +1 more ended",
+    "└─ ✗ Find where the config is loaded  worker · 3s failed: pi exited (1) · +1 more ended",
     "",
   ]);
   expect(renderWidget({ runs: [ok], queued: 0, now: 60_000, frame: 0, width: 200, theme: plain })[0]).toBe("○ Subagents");
@@ -55,7 +55,7 @@ test("finished rows show a status icon; the queue gets a row; nothing to show is
 });
 
 test("too many runs collapse into +N more, running first; lines fit the width", () => {
-  const runs = [...Array.from({ length: 6 }, () => fakeRun()), fakeRun({ state: { status: "done", endedAt: 1 } })];
+  const runs = [...Array.from({ length: 6 }, () => fakeRun({ label: "Task" })), fakeRun({ label: "Done", state: { status: "done", endedAt: 1 } })];
   const lines = renderWidget({ runs, queued: 0, now: 2, frame: 0, width: 40, theme: plain });
   expect(lines).toHaveLength(13);
   expect(lines.at(-2)).toBe("└─ +2 more (1 running, 1 finished)");
@@ -77,9 +77,9 @@ test("the widget registers once, re-renders through the TUI, and hides when runs
   expect(ui.calls).toEqual([["subagents", true]]);
   expect(ui.widgets.get("subagents")?.placement).toBe("aboveEditor");
   expect(ui.tui.renders).toBe(1);
-  expect(ui.render("subagents")[1]).toContain("⠋ scout");
+  expect(ui.render("subagents")[1]).toContain("⠋ Find where the config is loaded");
   vi.advanceTimersByTime(100);
-  expect(ui.render("subagents")[1]).toContain("⠙ scout");
+  expect(ui.render("subagents")[1]).toContain("⠙ Find where the config is loaded");
   runs[0]!.state = { ...runs[0]!.state, status: "done", endedAt: Date.now() };
   vi.advanceTimersByTime(LINGER_MS.done - 100);
   expect(ui.widgets.has("subagents")).toBe(true);

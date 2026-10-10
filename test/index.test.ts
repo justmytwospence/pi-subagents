@@ -37,7 +37,7 @@ test("the UI binds in the TUI only; /subagents lists recorded runs and opens one
   ui.selectAnswers.push((options) => options[0]);
   const done = command.handler("", ctx);
   await new Promise((r) => setTimeout(r, 0));
-  expect(ui.selects[0]?.options).toEqual(["1. abc123  done    scout · m/x · low  look around"]);
+  expect(ui.selects[0]?.options).toEqual(["1. abc123  done    look around · scout · m/x · low"]);
   expect(ui.customs).toHaveLength(1);
   ui.customs[0]?.component.handleInput("\x1b");
   await done;
@@ -95,14 +95,14 @@ test("b in FleetView moves a foreground call to the background; its result arriv
     expect(ui.widgets.has("subagents")).toBe(false);
     expect(ui.press("b")).toBe(true);
     const result = await call;
-    expect(result.content[0].text).toMatch(/^The user moved this single to the background: \w+ \(general, p\/m, high\)/u);
+    expect(result.content[0].text).toMatch(/^The user moved this single to the background: \w+ \(loop forever · general, p\/m, high\)/u);
     // Now a background run: still listed below the prompt (no widget above it by default), and b is no longer offered.
     expect(ui.widgets.has("subagents")).toBe(false);
     expect(ui.render("subagents-fleet")[0]).not.toContain("b background");
     expect(h.messages).toHaveLength(0);
     await h.commands.get("subagents").handler("stop all", ctx);
     await new Promise((r) => setTimeout(r, 200));
-    expect(h.messages[0]?.message.content).toMatch(/^Subagent single finished:\n\n\[general · p\/m · high · stopped\]/u);
+    expect(h.messages[0]?.message.content).toMatch(/^Subagent single finished:\n\n\[loop forever · general · p\/m · high · stopped\]/u);
     await h.emit("session_shutdown", { type: "session_shutdown" }, ctx);
   } finally {
     setPiInvocation(undefined);
@@ -121,9 +121,9 @@ test("a foreground call returns the child's answer and usage, and offers no deta
     const ctx = h.ctx({ ui, cwd: mkdtempSync(path.join(tmpdir(), "subagents-cwd-")), model: { provider: "p", id: "m" } });
     await h.emit("session_start", { type: "session_start" }, ctx);
     const result = await tool.execute("t1", { task: "count" }, undefined, undefined, ctx);
-    expect(result.content[0].text).toMatch(/^\[general · anthropic\/fake · high · done\]\ntask=count answer=cancelled/u);
+    expect(result.content[0].text).toMatch(/^\[count · general · anthropic\/fake · high · done\]\ntask=count answer=cancelled/u);
     expect(result.usage.cost.total).toBeCloseTo(0.03);
-    expect(ui.selects[0]?.title).toBe("[subagent general] Allow?");
+    expect(ui.selects[0]?.title).toBe("[subagent count · general] Allow?");
     await h.emit("session_shutdown", { type: "session_shutdown" }, ctx);
   } finally {
     setPiInvocation(undefined);
