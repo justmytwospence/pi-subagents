@@ -76,6 +76,8 @@ export interface ChildOptions {
   thinking: string;
   tools?: string[];
   systemPrompt?: string;
+  /** At this many turns the child is told to wrap up; if it calls tools again, it is stopped. */
+  maxTurns?: number;
   /** Session file to fork, for `context: "fork"`. */
   forkSession?: string;
   sessionDir: string;
@@ -224,6 +226,7 @@ export class Child {
         if (text) this.state.output = text;
         if (message.stopReason === "error" && message.errorMessage) this.state.error = message.errorMessage;
         this.update();
+        this.checkTurnLimit(message.stopReason);
         break;
       }
       case "tool_execution_start":
@@ -248,6 +251,21 @@ export class Child {
       case "extension_ui_request":
         void this.answerDialog(event);
         break;
+    }
+  }
+
+  /** At the limit, ask for a final answer; a turn later, if it still calls tools, stop with what it has. */
+  private checkTurnLimit(stopReason: unknown) {
+    const max = this.options.maxTurns;
+    if (!max || stopReason !== "toolUse" || this.state.status !== "running") return;
+    if (this.state.turns === max) {
+      this.send({
+        type: "steer",
+        message: `You have used your ${max} turns. Do not call any more tools: reply now with your final answer, including what you found and what is left undone.`,
+      });
+    } else if (this.state.turns > max) {
+      this.state.error = `stopped at the turn limit (${max}); the output may be partial`;
+      this.stop();
     }
   }
 

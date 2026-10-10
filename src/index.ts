@@ -296,6 +296,7 @@ export default function subagents(pi: ExtensionAPI) {
       thinking: resolved.thinking,
       ...(resolved.agent.tools ? { tools: resolved.agent.tools } : {}),
       ...(resolved.agent.prompt ? { systemPrompt: resolved.agent.prompt } : {}),
+      ...(resolved.agent.maxTurns ? { maxTurns: resolved.agent.maxTurns } : {}),
       ...(options.fork ? { forkSession: options.fork } : {}),
       sessionDir: path.join(agentDir(), "subagents", "sessions"),
       onUpdate: (state) => {
@@ -313,6 +314,7 @@ export default function subagents(pi: ExtensionAPI) {
       thinking: resolved.thinking,
       byJev: resolved.byJev,
       ...(resolved.tier ? { tier: resolved.tier } : {}),
+      ...(resolved.agent.maxTurns ? { maxTurns: resolved.agent.maxTurns } : {}),
       cwd: options.cwd,
       async: options.async,
       state: child.state,

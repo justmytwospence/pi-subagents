@@ -80,3 +80,22 @@ test("a stopped child reports stopped, even when Pi settles the aborted run firs
   child.stop();
   expect((await child.done).status).toBe("stopped");
 });
+
+const loop = { command: process.execPath, args: [path.join(import.meta.dirname, "fixtures", "fake-pi-loop.mjs")] };
+
+test("at maxTurns the child is told to wrap up, and it answers", async () => {
+  const child = new Child({ task: "t", cwd: process.cwd(), model: "m", thinking: "low", sessionDir: "/tmp", invocation: loop, maxTurns: 3 }).start();
+  const state = await child.done;
+  expect(state).toMatchObject({ status: "done", turns: 4, output: "final after 4 turns" });
+});
+
+test("a child that keeps calling tools past the limit is stopped with what it has", async () => {
+  process.env.FAKE_IGNORE_STEER = "1";
+  try {
+    const child = new Child({ task: "t", cwd: process.cwd(), model: "m", thinking: "low", sessionDir: "/tmp", invocation: loop, maxTurns: 2 }).start();
+    const state = await child.done;
+    expect(state).toMatchObject({ status: "stopped", turns: 3, output: "turn 3", error: expect.stringMatching(/turn limit \(2\)/u) });
+  } finally {
+    delete process.env.FAKE_IGNORE_STEER;
+  }
+});

@@ -12,6 +12,9 @@ test("parseAgent reads frontmatter", () => {
   expect(scout).toMatchObject({ name: "scout", tools: ["read", "grep"], model: "anthropic/claude-haiku-5", prompt: "You are a scout.", source: "user" });
   expect(reviewer.thinking).toBe("high");
   expect(parseAgent("no frontmatter", "user")).toBeUndefined();
+  expect(parseAgent("---\nname: a\ndescription: d\nmaxTurns: 12\n---\n", "user")?.maxTurns).toBe(12);
+  expect(parseAgent("---\nname: a\ndescription: d\nmax_turns: \"5\"\n---\n", "user")?.maxTurns).toBe(5);
+  expect(parseAgent("---\nname: a\ndescription: d\nmaxTurns: -1\n---\n", "user")).not.toHaveProperty("maxTurns");
 });
 
 test("questions only for the gaps", () => {

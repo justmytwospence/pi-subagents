@@ -11,6 +11,8 @@ export interface AgentDef {
   /** `provider/model` or a model pattern Pi resolves. */
   model?: string;
   thinking?: string;
+  /** Turns before the agent is told to wrap up; one turn later it is stopped. */
+  maxTurns?: number;
   /** Appended to the child's system prompt. */
   prompt: string;
   source: "builtin" | "user" | "project";
@@ -42,12 +44,15 @@ export function parseAgent(content: string, source: AgentDef["source"], file?: s
   const fm = parsed.frontmatter;
   if (typeof fm.name !== "string" || typeof fm.description !== "string") return undefined;
   const tools = list(fm.tools);
+  const turns = Number(fm.maxTurns ?? fm.max_turns);
+  const maxTurns = Number.isInteger(turns) && turns > 0 ? turns : undefined;
   return {
     name: fm.name.trim(),
     description: fm.description.trim(),
     ...(tools ? { tools } : {}),
     ...(typeof fm.model === "string" && fm.model.trim() ? { model: fm.model.trim() } : {}),
     ...(typeof fm.thinking === "string" && THINKING.has(fm.thinking.trim()) ? { thinking: fm.thinking.trim() } : {}),
+    ...(maxTurns ? { maxTurns } : {}),
     prompt: parsed.body.trim(),
     source,
     ...(file ? { file } : {}),

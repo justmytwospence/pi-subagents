@@ -76,7 +76,9 @@ thinking: low
 You are a scout. ...
 ```
 
-`tools`, `model`, and `thinking` are optional; the body is appended to the child's system prompt.
+`tools`, `model`, `thinking` and `maxTurns` are optional; the body is appended to the child's
+system prompt. At `maxTurns` (also `max_turns`) turns the child is told to stop calling tools and
+answer; if it calls tools again, it is stopped with its output so far, marked as possibly partial.
 Quote descriptions that contain a colon.
 
 ## How each choice is made

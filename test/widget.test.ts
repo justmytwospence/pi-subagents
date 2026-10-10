@@ -37,13 +37,14 @@ test("finished rows show a status icon; the queue gets a row; nothing to show is
   const ok = fakeRun({ agent: "reviewer", state: { status: "done", turns: 5, startedAt: 0, endedAt: 52_000 } });
   const bad = fakeRun({ agent: "worker", state: { status: "failed", error: "pi exited (1)", startedAt: 0, endedAt: 3_000 } });
   const stopped = fakeRun({ state: { status: "stopped", startedAt: 0, endedAt: 1_000 } });
+  stopped.maxTurns = 10;
   const lines = renderWidget({ runs: [ok, bad, stopped], queued: 2, now: 60_000, frame: 0, width: 200, theme: plain });
   expect(lines).toEqual([
     "● Subagents  2 queued",
     "├─ ◦ 2 queued",
     "├─ ✓ reviewer  Find where the config is loaded · ↻5 · 52s",
     "├─ ✗ worker  Find where the config is loaded · 3s failed: pi exited (1)",
-    "└─ ■ scout  Find where the config is loaded · 1s stopped",
+    "└─ ■ scout  Find where the config is loaded · ↻0/10 · 1s stopped",
     "",
   ]);
   expect(renderWidget({ runs: [ok], queued: 0, now: 60_000, frame: 0, width: 200, theme: plain })[0]).toBe("○ Subagents");

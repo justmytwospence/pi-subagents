@@ -73,7 +73,7 @@ export function taskLine(task: string, max = 40): string {
 /** `↻3 · 12.3k tokens · $0.012 · 14s`, leaving out what is zero. */
 export function runStats(run: Run, now = Date.now()): string {
   const parts: string[] = [];
-  if (run.state.turns) parts.push(`↻${run.state.turns}`);
+  if (run.state.turns || run.maxTurns) parts.push(`↻${run.state.turns}${run.maxTurns ? `/${run.maxTurns}` : ""}`);
   const tokens = displayTokens(run.state.usage);
   if (tokens) parts.push(formatTokens(tokens));
   const cost = formatCost(run.state.usage.cost.total);

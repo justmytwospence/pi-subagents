@@ -17,6 +17,8 @@ export interface Run {
   state: ChildState;
   /** Set while the child process runs. */
   child?: Child;
+  /** The agent's turn limit, if it has one. */
+  maxTurns?: number;
   /** The child's conversation; outlives the process. */
   conversation: Conversation;
   outputPath: string;
