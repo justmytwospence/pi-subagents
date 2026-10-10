@@ -1,6 +1,9 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "vitest";
 import { Child, childArgs } from "../src/child.ts";
+import { messageText, readTranscript, transcriptWriter } from "../src/conversation.ts";
 
 const fake = { command: process.execPath, args: [path.join(import.meta.dirname, "fixtures", "fake-pi.mjs")] };
 
@@ -28,6 +31,24 @@ test("a child runs the task over RPC, forwards its dialog, and reports usage", a
   expect(updates).toContain("bash: npm test");
   expect(state.usage.cost.total).toBeCloseTo(0.03);
   expect(state.model).toBe("anthropic/fake");
+});
+
+test("a child keeps its conversation and saves each finished message", async () => {
+  const file = path.join(mkdtempSync(path.join(tmpdir(), "subagents-test-")), "messages.jsonl");
+  const child = new Child({ task: "t", cwd: process.cwd(), model: "m", thinking: "low", sessionDir: "/tmp", invocation: fake, onMessage: transcriptWriter(file) }).start();
+  const seen: string[] = [];
+  child.conversation.subscribe(() => {
+    const open = child.conversation.streaming;
+    if (open?.role === "assistant" && messageText(open)) seen.push(messageText(open));
+  });
+  await child.done;
+  const c = child.conversation;
+  expect(c.messages.map((m) => m.role)).toEqual(["user", "assistant", "toolResult", "assistant"]);
+  expect(seen).toContain("Running the tests");
+  expect(c.messages[1]?.content[1]).toEqual({ type: "toolCall", id: "c1", name: "bash", arguments: { command: "npm test" } });
+  expect(c.toolUses).toBe(1);
+  expect(c.activeTools.size).toBe(0);
+  expect(readTranscript(file)).toEqual(c.messages);
 });
 
 test("dialogs are cancelled without a handler; steering reaches the child", async () => {

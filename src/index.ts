@@ -12,8 +12,10 @@ import { Type } from "typebox";
 import { type AgentDef, discoverAgents } from "./agents.ts";
 import { Child, type ChildState, type DialogAnswer, type DialogRequest, type Usage, addUsage, emptyUsage } from "./child.ts";
 import { agentDir, loadConfig } from "./config.ts";
+import { transcriptWriter } from "./conversation.ts";
 import { type JevConfig, askJev } from "./jev.ts";
 import { DEFAULT_TIER_DESCRIPTIONS, type Given, type Resolved, type Tier, pickQuestions, readPicks, resolve } from "./pick.ts";
+import { type Run, displayTokens, transcriptPath } from "./run.ts";
 import { clip, recentTexts } from "./transcript.ts";
 
 export interface SubagentsConfig extends Record<string, unknown> {
@@ -67,21 +69,6 @@ const Params = Type.Object({
 
 type Item = { agent?: string; task: string; cwd?: string; model?: string; thinking?: string };
 
-interface Run {
-  id: string;
-  agent: string;
-  task: string;
-  model: string;
-  thinking: string;
-  byJev: Resolved["byJev"];
-  tier?: Tier;
-  cwd: string;
-  async: boolean;
-  state: ChildState;
-  child?: Child;
-  outputPath: string;
-}
-
 export interface RunView {
   id: string;
   agent: string;
@@ -92,6 +79,7 @@ export interface RunView {
   status: ChildState["status"];
   activity?: string;
   turns: number;
+  tokens: number;
   cost: number;
   seconds: number;
   error?: string;
@@ -115,6 +103,7 @@ function view(run: Run, withOutput = false): RunView {
     status: s.status,
     ...(s.activity ? { activity: s.activity } : {}),
     turns: s.turns,
+    tokens: displayTokens(s.usage),
     cost: s.usage.cost.total,
     seconds: Math.round(((s.endedAt ?? Date.now()) - s.startedAt) / 1000),
     ...(s.error ? { error: clip(s.error, 400) } : {}),
@@ -219,19 +208,6 @@ export default function subagents(pi: ExtensionAPI) {
   ): Run => {
     const id = shortId();
     const outputPath = path.join(agentDir(), "subagents", id, "output.md");
-    const run: Run = {
-      id,
-      agent: resolved.agent.name,
-      task: item.task,
-      model: resolved.model,
-      thinking: resolved.thinking,
-      byJev: resolved.byJev,
-      ...(resolved.tier ? { tier: resolved.tier } : {}),
-      cwd: options.cwd,
-      async: options.async,
-      state: { status: "running", output: "", usage: emptyUsage(), turns: 0, startedAt: Date.now() },
-      outputPath,
-    };
     const child = new Child({
       task: item.task,
       cwd: options.cwd,
@@ -246,9 +222,23 @@ export default function subagents(pi: ExtensionAPI) {
         options.onUpdate();
       },
       onDialog: dialogFor(ctx, resolved.agent.name),
+      onMessage: transcriptWriter(transcriptPath(outputPath)),
     });
-    run.child = child;
-    run.state = child.state;
+    const run: Run = {
+      id,
+      agent: resolved.agent.name,
+      task: item.task,
+      model: resolved.model,
+      thinking: resolved.thinking,
+      byJev: resolved.byJev,
+      ...(resolved.tier ? { tier: resolved.tier } : {}),
+      cwd: options.cwd,
+      async: options.async,
+      state: child.state,
+      child,
+      conversation: child.conversation,
+      outputPath,
+    };
     runs.set(id, run);
     child.start();
     record(run);

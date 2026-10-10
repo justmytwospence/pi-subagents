@@ -1,11 +1,12 @@
 // One subagent: a `pi --mode rpc` child process with its own context window. The task is sent as a
 // prompt; the run ends at `agent_settled`, when stdin is closed so Pi shuts down in order. RPC keeps
 // the child steerable, and its extension dialogs (for example a tool gate asking for approval) are
-// forwarded to the parent.
+// forwarded to the parent. Every event also feeds the child's `Conversation`, which the viewer shows.
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { Conversation, type Message, describeTool } from "./conversation.ts";
 
 export interface Usage {
   input: number;
@@ -80,6 +81,8 @@ export interface ChildOptions {
   sessionDir: string;
   onUpdate?: (state: ChildState) => void;
   onDialog?: (request: DialogRequest) => Promise<DialogAnswer>;
+  /** Each finished message, for example to save it. */
+  onMessage?: (message: Message) => void;
   /** Command and leading args to run Pi; defaults to the running Pi. */
   invocation?: { command: string; args: string[] };
 }
@@ -106,6 +109,7 @@ export function childArgs(options: ChildOptions, promptFile?: string): string[] 
 export class Child {
   readonly state: ChildState;
   readonly done: Promise<ChildState>;
+  readonly conversation: Conversation;
   private proc: ChildProcess | undefined;
   private settle!: (state: ChildState) => void;
   private stderr = "";
@@ -113,6 +117,7 @@ export class Child {
 
   constructor(private readonly options: ChildOptions) {
     this.state = { status: "running", output: "", usage: emptyUsage(), turns: 0, startedAt: Date.now() };
+    this.conversation = new Conversation(options.onMessage);
     this.done = new Promise((resolve) => {
       this.settle = resolve;
     });
@@ -185,6 +190,7 @@ export class Child {
     this.state.endedAt = Date.now();
     this.state.activity = undefined;
     if (error) this.state.error = error;
+    this.conversation.close();
     this.update();
     this.settle(this.state);
   }
@@ -197,6 +203,7 @@ export class Child {
     } catch {
       return;
     }
+    this.conversation.apply(event);
     switch (event.type) {
       case "message_end": {
         const message = event.message;
@@ -216,10 +223,13 @@ export class Child {
         this.state.activity = describeTool(event.toolName, event.args);
         this.update();
         break;
-      case "tool_execution_end":
-        this.state.activity = undefined;
+      case "tool_execution_end": {
+        // Another tool may still be running in parallel.
+        const still = [...this.conversation.activeTools.values()].at(-1);
+        this.state.activity = still ? describeTool(still.name, still.args) : undefined;
         this.update();
         break;
+      }
       case "response":
         if (event.command === "prompt" && event.success === false) this.finishAndClose("failed", String(event.error ?? "the prompt was rejected"));
         else if (event.command === "prompt" && event.data?.disposition === "handled") this.finishAndClose("done");
@@ -260,11 +270,4 @@ export class Child {
     }
     this.send({ type: "extension_ui_response", id: event.id, ...(answer ?? { cancelled: true }) });
   }
-}
-
-export function describeTool(name: unknown, args: unknown): string {
-  const a = (args ?? {}) as Record<string, unknown>;
-  const detail = typeof a.command === "string" ? a.command : typeof a.path === "string" ? a.path : typeof a.pattern === "string" ? a.pattern : "";
-  const flat = detail.replace(/\s+/gu, " ").trim();
-  return `${String(name ?? "tool")}${flat ? `: ${flat.length > 60 ? `${flat.slice(0, 59)}…` : flat}` : ""}`;
 }
