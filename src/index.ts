@@ -17,6 +17,7 @@ import { type JevConfig, askJev } from "./jev.ts";
 import { DEFAULT_TIER_DESCRIPTIONS, type Given, type Resolved, type Tier, pickQuestions, readPicks, resolve } from "./pick.ts";
 import { type Run, displayTokens, transcriptPath } from "./run.ts";
 import { clip, recentTexts } from "./transcript.ts";
+import { RunsWidget, WIDGET_MODES, type WidgetMode } from "./ui/widget.ts";
 
 export interface SubagentsConfig extends Record<string, unknown> {
   jev: JevConfig;
@@ -25,6 +26,8 @@ export interface SubagentsConfig extends Record<string, unknown> {
   tierDescriptions: Record<Tier, string>;
   maxParallel: number;
   concurrency: number;
+  /** Which runs the widget above the editor shows: async ones (default), all, or none. */
+  widget: WidgetMode;
 }
 
 export const DEFAULT_CONFIG: SubagentsConfig = {
@@ -33,6 +36,7 @@ export const DEFAULT_CONFIG: SubagentsConfig = {
   tierDescriptions: DEFAULT_TIER_DESCRIPTIONS,
   maxParallel: 8,
   concurrency: 4,
+  widget: "background",
 };
 
 const MAX_LINES = 2_000;
@@ -139,6 +143,22 @@ export default function subagents(pi: ExtensionAPI) {
   const runs = new Map<string, Run>();
   let config: SubagentsConfig = DEFAULT_CONFIG;
   let backgroundCount = 0;
+  /** Tasks waiting for a free slot (parallel) or their turn (chain), by sync/async. */
+  const queued = { async: 0, sync: 0 };
+
+  const widgetMode = (): WidgetMode => (WIDGET_MODES.includes(config.widget) ? config.widget : "background");
+  const widget = new RunsWidget({
+    runs: () => [...runs.values()],
+    queued: (mode) => queued.async + (mode === "all" ? queued.sync : 0),
+    mode: widgetMode,
+  });
+  const bindUI = (ctx: ExtensionContext) => {
+    if (ctx.mode !== "tui" || !ctx.hasUI) return;
+    widget.setUI(ctx.ui);
+  };
+  const refreshUI = () => {
+    widget.update();
+  };
 
   const findRun = (id: string | undefined) => {
     if (!id) return undefined;
@@ -242,6 +262,7 @@ export default function subagents(pi: ExtensionAPI) {
     runs.set(id, run);
     child.start();
     record(run);
+    refreshUI();
     void child.done.then((state) => {
       run.state = state;
       try {
@@ -252,6 +273,7 @@ export default function subagents(pi: ExtensionAPI) {
       }
       run.child = undefined;
       record(run);
+      refreshUI();
     });
     return run;
   };
@@ -266,10 +288,13 @@ export default function subagents(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     config = loadConfig("pi-subagents", DEFAULT_CONFIG, ctx.cwd);
+    bindUI(ctx);
+    refreshUI();
   });
 
   pi.on("session_shutdown", () => {
     for (const run of runs.values()) run.child?.stop();
+    widget.dispose();
   });
 
   pi.registerTool({
@@ -285,6 +310,7 @@ export default function subagents(pi: ExtensionAPI) {
     parameters: Params,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       config = loadConfig("pi-subagents", DEFAULT_CONFIG, ctx.cwd);
+      bindUI(ctx);
       const action = params.action ?? "run";
 
       if (action !== "run") {
@@ -346,8 +372,10 @@ export default function subagents(pi: ExtensionAPI) {
         return params.worktree ? worktreeFor(base, item.task) : base;
       };
 
-      const runOne = async (item: Item, r: Resolved, isAsync: boolean): Promise<Run> => {
-        const run = startRun(ctx, item, r, { cwd: await cwdFor(item), ...(fork ? { fork } : {}), async: isAsync, onUpdate: update });
+      const runOne = async (item: Item, r: Resolved, isAsync: boolean, dequeue: () => void): Promise<Run> => {
+        const cwd = await cwdFor(item);
+        dequeue();
+        const run = startRun(ctx, item, r, { cwd, ...(fork ? { fork } : {}), async: isAsync, onUpdate: update });
         started.push(run);
         update();
         const abort = () => run.child?.stop();
@@ -358,24 +386,39 @@ export default function subagents(pi: ExtensionAPI) {
       };
 
       const execute = async (isAsync: boolean): Promise<Run[]> => {
-        if (mode === "chain") {
-          let previous = "";
-          const done: Run[] = [];
-          for (const [index, item] of items.entries()) {
-            const run = await runOne({ ...item, task: item.task.replaceAll("{previous}", previous) }, resolved[index] as Resolved, isAsync);
-            done.push(run);
-            if (run.state.status !== "done") break;
-            previous = run.state.output;
-          }
-          return done;
-        }
-        const queue = items.map((item, index) => ({ item, index }));
-        const done: Run[] = new Array(items.length);
-        const worker = async () => {
-          for (let next = queue.shift(); next; next = queue.shift()) done[next.index] = await runOne(next.item, resolved[next.index] as Resolved, isAsync);
+        const kind = isAsync ? "async" : "sync";
+        let waiting = items.length;
+        queued[kind] += waiting;
+        const dequeue = () => {
+          if (waiting <= 0) return;
+          waiting--;
+          queued[kind]--;
         };
-        await Promise.all(Array.from({ length: Math.min(config.concurrency, items.length) }, worker));
-        return done;
+        try {
+          if (mode === "chain") {
+            let previous = "";
+            const done: Run[] = [];
+            for (const [index, item] of items.entries()) {
+              const run = await runOne({ ...item, task: item.task.replaceAll("{previous}", previous) }, resolved[index] as Resolved, isAsync, dequeue);
+              done.push(run);
+              if (run.state.status !== "done") break;
+              previous = run.state.output;
+            }
+            return done;
+          }
+          const queue = items.map((item, index) => ({ item, index }));
+          const done: Run[] = new Array(items.length);
+          const worker = async () => {
+            for (let next = queue.shift(); next; next = queue.shift()) done[next.index] = await runOne(next.item, resolved[next.index] as Resolved, isAsync, dequeue);
+          };
+          await Promise.all(Array.from({ length: Math.min(config.concurrency, items.length) }, worker));
+          return done;
+        } finally {
+          // A chain that stopped early leaves steps that will never run.
+          queued[kind] -= waiting;
+          waiting = 0;
+          refreshUI();
+        }
       };
 
       if (params.async) {
