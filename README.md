@@ -106,13 +106,15 @@ On 15 tasks across six agents, Jev picked the expected agent every time, in abou
   "maxParallel": 8,
   "concurrency": 4,
   "widget": "background",
-  "fleetView": true
+  "fleetView": true,
+  "maxDepth": 2
 }
 ```
 
 A tier left out uses the parent's model. `tierDescriptions` overrides what Jev reads for each tier.
 `widget` is `"background"` (async runs only), `"all"`, or `"off"`; `fleetView: false` turns the
-list below the editor off. Requires Pi 0.99 or newer for classifier models.
+list below the editor off. `maxDepth` is how many levels of subagents may run below the main
+session: with 2, a subagent can start subagents of its own, but theirs get no `subagent` tool. Requires Pi 0.99 or newer for classifier models.
 
 ## Development
 

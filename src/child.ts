@@ -87,6 +87,13 @@ export interface ChildOptions {
   invocation?: { command: string; args: string[] };
 }
 
+/** How deep this Pi is in a tree of subagents: 0 for a top-level session, 1 for its children. */
+export function subagentDepth(env: NodeJS.ProcessEnv = process.env): number {
+  const depth = Number(env.PI_SUBAGENT_DEPTH);
+  if (Number.isInteger(depth) && depth >= 0) return depth;
+  return env.PI_SUBAGENT ? 1 : 0;
+}
+
 /** How to run the same Pi that is running this extension. */
 export function piInvocation(): { command: string; args: string[] } {
   const script = process.argv[1];
@@ -134,7 +141,7 @@ export class Child {
     const proc = spawn(invocation.command, [...invocation.args, ...childArgs(this.options, promptFile)], {
       cwd: this.options.cwd,
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, PI_SUBAGENT: "1" },
+      env: { ...process.env, PI_SUBAGENT: "1", PI_SUBAGENT_DEPTH: String(subagentDepth() + 1) },
     });
     this.proc = proc;
     let buffer = "";

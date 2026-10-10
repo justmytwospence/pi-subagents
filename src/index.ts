@@ -10,7 +10,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentDef, discoverAgents } from "./agents.ts";
-import { Child, type ChildState, type DialogAnswer, type DialogRequest, type Usage, addUsage, emptyUsage } from "./child.ts";
+import { Child, type ChildState, subagentDepth, type DialogAnswer, type DialogRequest, type Usage, addUsage, emptyUsage } from "./child.ts";
 import { agentDir, loadConfig } from "./config.ts";
 import { Conversation, type Message, readTranscript, transcriptWriter } from "./conversation.ts";
 import { type JevConfig, askJev } from "./jev.ts";
@@ -32,6 +32,8 @@ export interface SubagentsConfig extends Record<string, unknown> {
   widget: WidgetMode;
   /** The list of subagents below the editor that ↓ at an empty prompt moves into. */
   fleetView: boolean;
+  /** Levels of subagents below the main session: 2 lets a child start children of its own, 1 does not. */
+  maxDepth: number;
 }
 
 export const DEFAULT_CONFIG: SubagentsConfig = {
@@ -42,6 +44,7 @@ export const DEFAULT_CONFIG: SubagentsConfig = {
   concurrency: 4,
   widget: "background",
   fleetView: true,
+  maxDepth: 2,
 };
 
 const MAX_LINES = 2_000;
@@ -179,6 +182,8 @@ function slug(text: string) {
 }
 
 export default function subagents(pi: ExtensionAPI) {
+  // At the deepest level allowed, a subagent gets no subagent tool, so nesting cannot run away.
+  if (subagentDepth() >= loadConfig("pi-subagents", DEFAULT_CONFIG, process.cwd()).maxDepth) return;
   const runs = new Map<string, Run>();
   let config: SubagentsConfig = DEFAULT_CONFIG;
   let backgroundCount = 0;

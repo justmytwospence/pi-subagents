@@ -56,3 +56,22 @@ test("the UI binds in the TUI only; /subagents lists recorded runs and opens one
   await h.emit("session_shutdown", { type: "session_shutdown" }, ctx);
   expect(ui.inputHandlers.size).toBe(0);
 });
+
+test("at the deepest allowed level a subagent gets no subagent tool", () => {
+  const registered = (depth: string | undefined) => {
+    const h = harness();
+    const tools: string[] = [];
+    h.pi.registerTool = (tool: { name: string }) => void tools.push(tool.name);
+    if (depth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
+    else process.env.PI_SUBAGENT_DEPTH = depth;
+    try {
+      subagents(h.pi);
+    } finally {
+      delete process.env.PI_SUBAGENT_DEPTH;
+    }
+    return tools;
+  };
+  expect(registered(undefined)).toEqual(["subagent"]);
+  expect(registered("1")).toEqual(["subagent"]);
+  expect(registered("2")).toEqual([]);
+});

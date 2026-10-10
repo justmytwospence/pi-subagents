@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "vitest";
-import { Child, childArgs } from "../src/child.ts";
+import { Child, childArgs, subagentDepth } from "../src/child.ts";
 import { messageText, readTranscript, transcriptWriter } from "../src/conversation.ts";
 
 const fake = { command: process.execPath, args: [path.join(import.meta.dirname, "fixtures", "fake-pi.mjs")] };
@@ -63,4 +63,11 @@ test("childArgs: fork and system prompt", () => {
   expect(childArgs({ task: "t", cwd: "/", model: "m", thinking: "low", sessionDir: "/s", forkSession: "/x.jsonl" }, "/p.md")).toEqual([
     "--mode", "rpc", "--fork", "/x.jsonl", "--session-dir", "/s", "--model", "m", "--thinking", "low", "--append-system-prompt", "/p.md",
   ]);
+});
+
+test("subagentDepth: the explicit depth, else 1 inside a subagent, else 0", () => {
+  expect(subagentDepth({})).toBe(0);
+  expect(subagentDepth({ PI_SUBAGENT: "1" })).toBe(1);
+  expect(subagentDepth({ PI_SUBAGENT: "1", PI_SUBAGENT_DEPTH: "2" })).toBe(2);
+  expect(subagentDepth({ PI_SUBAGENT_DEPTH: "nope" })).toBe(0);
 });
