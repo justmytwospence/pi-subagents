@@ -98,8 +98,8 @@ export function renderFleet({ roster, selected, active, stopArmed, canBackground
               "dim",
               `j/k select · l/enter view${stoppable ? " · x stop" : ""}${dismissable ? " · x dismiss" : ""}${stoppable && canBackground ? " · b background" : ""} · h/esc back`,
             );
-    lines.push(truncateToWidth(`  ${hint}`, width));
-    lines.push(truncateToWidth(`  ${bullet(0)} ${active && sel === 0 ? theme.fg("text", "main") : "main"}`, width));
+    lines.push(truncateToWidth(` ${hint}`, width));
+    lines.push(truncateToWidth(` ${bullet(0)} ${active && sel === 0 ? theme.fg("text", "main") : "main"}`, width));
     // Runs are roster rows 1..runs.length; scroll so the selected one shows.
     const visible = Math.min(MAX_ROWS, runs.length);
     const selRun = chosen?.kind === "run" ? sel - 1 : 0;
@@ -109,7 +109,7 @@ export function renderFleet({ roster, selected, active, stopArmed, canBackground
       const run = runs[i];
       if (!run) continue;
       const on = active && i + 1 === sel;
-      const left = `  ${bullet(i + 1)} ${on ? theme.bold(theme.fg("text", run.agent)) : theme.fg("muted", run.agent)}  ${on ? theme.fg("text", taskLine(run.task, 60)) : taskLine(run.task, 60)}`;
+      const left = ` ${bullet(i + 1)} ${on ? theme.bold(theme.fg("text", run.agent)) : theme.fg("muted", run.agent)}  ${on ? theme.fg("text", taskLine(run.task, 60)) : taskLine(run.task, 60)}`;
       const cost = formatCost(run.state.usage.cost.total);
       const stats = `${formatElapsed(elapsedMs(run, now))} · ↓ ${formatCount(displayTokens(run.state.usage))} tokens${cost ? ` · ${cost}` : ""}`;
       const done = run.state.status === "running" ? "" : `${statusIcon(run.state.status, theme)} `;
@@ -126,9 +126,9 @@ export function renderFleet({ roster, selected, active, stopArmed, canBackground
     const label = on ? inverse(` ${e.pill.label} `) : theme.fg("muted", ` ${e.pill.label} `);
     const alert = e.pill.alert ? ` ${theme.fg("dim", "·")} ${theme.fg("error", e.pill.alert)}` : "";
     const hint = on && !runs.length ? theme.fg("dim", "  l/enter view · h/esc back") : "";
-    lines.push(truncateToWidth(` ${label}${alert}${hint}`, width));
+    lines.push(truncateToWidth(`${label}${alert}${hint}`, width));
   }
-  if (note) lines.push(truncateToWidth(`  ${theme.fg("dim", note)}`, width));
+  if (note) lines.push(truncateToWidth(` ${theme.fg("dim", note)}`, width));
   // Pi puts the footer right under below-editor widgets.
   lines.push("");
   return lines;

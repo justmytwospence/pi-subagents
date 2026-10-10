@@ -33,24 +33,24 @@ test("rows: the selection, stats flush right, a status icon once finished, and s
   const roster = fleetRoster([a, b], 60_000, undefined, [], 0);
   const idle = renderFleet({ roster, selected: 0, active: false, now: 60_000, width: 80, theme: plain });
   expect(idle).toHaveLength(5);
-  expect(idle.slice(0, 2)).toEqual(["  ↓ or ← for subagents", "  ○ main"]);
-  expect(idle[2]).toMatch(/^ {2}○ scout {2}Find where the config is loaded +1m00s · ↓ 13\.1k tokens$/u);
-  expect(idle[3]).toMatch(/^ {2}○ reviewer {2}Review the diff +✗ 52s · ↓ 0 tokens$/u);
+  expect(idle.slice(0, 2)).toEqual([" ↓ or ← for subagents", " ○ main"]);
+  expect(idle[2]).toMatch(/^ ○ scout {2}Find where the config is loaded +1m00s · ↓ 13\.1k tokens$/u);
+  expect(idle[3]).toMatch(/^ ○ reviewer {2}Review the diff +✗ 52s · ↓ 0 tokens$/u);
   expect(idle[4]).toBe("");
   expect(idle.slice(2, 4).map(visibleWidth)).toEqual([80, 80]);
   const active = renderFleet({ roster, selected: 2, active: true, now: 60_000, width: 80, theme: plain });
   expect(active[0]).toContain("j/k select · l/enter view · x dismiss · h/esc back");
-  expect(active[1]).toBe("  ○ main");
-  expect(active[3]).toMatch(/^ {2}● reviewer/u);
+  expect(active[1]).toBe(" ○ main");
+  expect(active[3]).toMatch(/^ ● reviewer/u);
   // A pill, and the note after a success.
   const shells = { id: "bg", title: "shells", entries: () => [], open: async () => undefined, pill: () => ({ label: "2 shells", alert: "1 failed" }) };
   const withPill = fleetRoster([a], 60_000, undefined, [shells]);
   expect(renderFleet({ roster: withPill, selected: 1, active: true, now: 60_000, width: 80, theme: plain, note: "/tasks to see subagents" }).slice(-3)).toEqual([
-    "  2 shells  · 1 failed",
-    "  /tasks to see subagents",
+    " 2 shells  · 1 failed",
+    " /tasks to see subagents",
     "",
   ]);
-  expect(renderFleet({ roster: fleetRoster([], 0, undefined, [shells]), selected: 0, active: false, now: 0, width: 80, theme: plain })).toEqual(["  2 shells  · 1 failed", ""]);
+  expect(renderFleet({ roster: fleetRoster([], 0, undefined, [shells]), selected: 0, active: false, now: 0, width: 80, theme: plain })).toEqual([" 2 shells  · 1 failed", ""]);
 
   const many = fleetRoster(Array.from({ length: 8 }, (_, i) => fakeRun({ agent: `a${i}`, state: { startedAt: i } })), 0);
   const top = renderFleet({ roster: many, selected: 0, active: true, now: 0, width: 60, theme: plain });
@@ -87,7 +87,7 @@ test("↓ at an empty prompt enters the list; arrows select; Esc or ↑ past mai
   expect(ui.render("subagents-fleet")[3]).toMatch(/● worker/u);
   expect(ui.press(KEY.up)).toBe(true);
   expect(ui.press(KEY.up)).toBe(true);
-  expect(ui.render("subagents-fleet")[1]).toBe("  ● main");
+  expect(ui.render("subagents-fleet")[1]).toBe(" ● main");
   expect(ui.press(KEY.up)).toBe(true);
   expect(ui.render("subagents-fleet")[0]).toContain("↓ or ← for subagents");
   expect(ui.press(KEY.up)).toBe(false);
@@ -128,7 +128,7 @@ test("Enter opens the viewer, which owns the keys; closing it returns to the sam
   expect(ui.customs).toHaveLength(0);
   // Back in the list; the finished run has now dropped out, so the selection clamps.
   expect(ui.press(KEY.up)).toBe(true);
-  expect(ui.render("subagents-fleet")[1]).toBe("  ● main");
+  expect(ui.render("subagents-fleet")[1]).toBe(" ● main");
   ui.press(KEY.down);
   ui.press(KEY.enter);
   ui.customs[0]!.component.handleInput(KEY.enter);
@@ -190,12 +190,12 @@ test("a success leaves at once with a note for 30 s; a failure stays until x; di
   const lines = ui.render("subagents-fleet");
   expect(lines.some((l) => l.includes("scout"))).toBe(false);
   expect(lines.some((l) => l.includes("worker"))).toBe(true);
-  expect(lines.at(-2)).toBe("  /tasks to see subagents");
+  expect(lines.at(-2)).toBe(" /tasks to see subagents");
   // x on the failed run dismisses it; the note alone stays until its 30 s are up.
   ui.press(KEY.down);
   expect(ui.render("subagents-fleet")[0]).toContain("x dismiss");
   expect(ui.press("x")).toBe(true);
-  expect(ui.render("subagents-fleet")).toEqual(["  /tasks to see subagents", ""]);
+  expect(ui.render("subagents-fleet")).toEqual([" /tasks to see subagents", ""]);
   vi.advanceTimersByTime(SUCCESS_HINT_MS);
   expect(ui.widgets.has("subagents-fleet")).toBe(false);
   expect(ui.press(KEY.down)).toBe(false);
@@ -227,9 +227,9 @@ test("a pill: ↓ selects it when there are no runs; Enter opens its dialog, whi
   const fleet = new FleetView({ runs: () => [], enabled: () => true, actions: () => ({}), sections: () => [shells] });
   fleet.setUI(ui);
   fleet.update();
-  expect(ui.render("subagents-fleet")).toEqual(["  2 shells ", ""]);
+  expect(ui.render("subagents-fleet")).toEqual([" 2 shells ", ""]);
   expect(ui.press(KEY.down)).toBe(true);
-  expect(ui.render("subagents-fleet")[0]).toBe(" \x1b[7m 2 shells \x1b[27m  l/enter view · h/esc back");
+  expect(ui.render("subagents-fleet")[0]).toBe("\x1b[7m 2 shells \x1b[27m  l/enter view · h/esc back");
   expect(ui.press(KEY.enter)).toBe(true);
   await Promise.resolve();
   expect(opened).toBe(1);

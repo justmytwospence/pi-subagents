@@ -60,7 +60,7 @@ test("hosting: a source offered before or after our session start ends FleetView
   expect(emitted.some(([c]) => c === ACTIVITY_HOST)).toBe(true);
   expect(shells.calls.hosted).toEqual([true]);
   // No runs: FleetView is just the pill.
-  expect(ui.render("subagents-fleet")).toEqual(["  2 shells ", ""]);
+  expect(ui.render("subagents-fleet")).toEqual([" 2 shells ", ""]);
   // Offered again: still shown, not toggled.
   h.pi.events.emit(ACTIVITY_SECTION, { section: shells.section });
   expect(shells.calls.hosted).toEqual([true]);
