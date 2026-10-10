@@ -40,7 +40,8 @@ its result arrives. Three views follow the children while they work (in the TUI 
 - **Widget** (above the editor): one row per running subagent with a spinner, the agent, its task,
   model and effort (Jev's picks marked "(Jev)"), turns, tokens, cost and elapsed time, and its
   current tool or text beneath. Tasks waiting for a slot show as queued. A finished run stays 8
-  seconds with a status icon (20 if it failed or was stopped), then the widget hides. By default it
+  seconds with a status icon; a failed or stopped one stays until your next message, several of them
+  sharing one row (`· +2 more ended`). Then the widget hides. By default it
   shows async runs only, since a foreground run already renders in its tool row. Double-click a
   row (fullscreen mode) to open that run's conversation.
 - **FleetView** (below the editor): `main` and every running subagent, with elapsed time and
@@ -48,7 +49,8 @@ its result arrives. Three views follow the children while they work (in the TUI 
   the selected run's conversation, `x` twice to stop it, `b` to move a foreground run to the
   background (the tool call returns and the result arrives as a message, like `async`), and `Esc`
   (or `↑` past `main`) to return to the prompt. Finished
-  runs stay 5 seconds; a run whose conversation is open stays until you close it.
+  runs stay 5 seconds (failed or stopped ones until your next message); a run whose conversation is
+  open stays until you close it.
 - **Conversation viewer** (an overlay): the child's conversation as it streams, with tool calls,
   results, live tool output, queued steering messages and current activity. It follows new output
   until you scroll up (`↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`). `Enter` opens a composer that steers

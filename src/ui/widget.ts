@@ -23,19 +23,20 @@ export const MAX_LINES = 12;
 /** The whole panel's rows when another extension's section shares it. */
 export const PANEL_LINES = 16;
 const FRAME_MS = 100;
-/** How long a finished run stays: a success briefly, a failure or stop a little longer. */
-export const LINGER_MS = { done: 8_000, other: 20_000 };
+/** How long a run that succeeded stays. A failed or stopped run stays until the user's next message. */
+export const LINGER_MS = { done: 8_000 };
 
-export function lingers(run: Run, now: number): boolean {
+/** Whether a finished run still shows: a success for 8 s; anything else until a message after it ended (`dismissedAt`). */
+export function lingers(run: Run, now: number, dismissedAt: number): boolean {
   const ended = run.state.endedAt;
   if (run.state.status === "running" || ended === undefined) return false;
-  return now - ended < (run.state.status === "done" ? LINGER_MS.done : LINGER_MS.other);
+  return run.state.status === "done" ? now - ended < LINGER_MS.done : ended > dismissedAt;
 }
 
 /** The runs the widget shows: by mode (background = async only), running or lingering. */
-export function widgetRuns(runs: readonly Run[], mode: WidgetMode, now: number): Run[] {
+export function widgetRuns(runs: readonly Run[], mode: WidgetMode, now: number, dismissedAt: number): Run[] {
   if (mode === "off") return [];
-  return runs.filter((r) => (mode === "all" || r.async) && (r.state.status === "running" || lingers(r, now)));
+  return runs.filter((r) => (mode === "all" || r.async) && (r.state.status === "running" || lingers(r, now, dismissedAt)));
 }
 
 export interface WidgetFrame {
@@ -59,7 +60,11 @@ export function renderWidget(f: WidgetFrame): string[] {
 /** The rows without the trailing blank, and which run each line belongs to. */
 export function renderSection({ runs, queued, now, frame, width, theme, maxLines = MAX_LINES }: WidgetFrame): { lines: string[]; targets: (string | undefined)[] } {
   const running = runs.filter((r) => r.state.status === "running");
-  const finished = runs.filter((r) => r.state.status !== "running");
+  // Successes one row each; failures and stops share one row, the latest, with a count of the rest.
+  const held = runs.filter((r) => r.state.status !== "running" && r.state.status !== "done").sort((a, b) => (a.state.endedAt ?? 0) - (b.state.endedAt ?? 0));
+  const latest = held.at(-1);
+  const finished = [...runs.filter((r) => r.state.status === "done"), ...(latest ? [latest] : [])];
+  const moreEnded = held.length - 1;
   if (!running.length && !finished.length && !queued) return { lines: [], targets: [] };
   const max = Math.max(2, maxLines);
   const cut = (line: string) => truncateToWidth(line, width);
@@ -74,7 +79,8 @@ export function renderSection({ runs, queued, now, frame, width, theme, maxLines
   const finishedRows = finished.map((r) => {
     const s = r.state;
     const note = s.status === "failed" ? theme.fg("error", ` failed${s.error ? `: ${taskLine(s.error, 60)}` : ""}`) : s.status === "stopped" ? theme.fg("muted", " stopped") : "";
-    return cut(`${theme.fg("dim", "├─")} ${statusIcon(s.status, theme)} ${theme.fg("muted", r.agent)}  ${theme.fg("dim", `${taskLine(r.task)} · ${runStats(r, now)}`)}${note}`);
+    const more = r === latest && moreEnded > 0 ? theme.fg("dim", ` · +${moreEnded} more ended`) : "";
+    return cut(`${theme.fg("dim", "├─")} ${statusIcon(s.status, theme)} ${theme.fg("muted", r.agent)}  ${theme.fg("dim", `${taskLine(r.task)} · ${runStats(r, now)}`)}${note}${more}`);
   });
   const queuedRow = queued ? cut(`${theme.fg("dim", "├─")} ${theme.fg("muted", "◦")} ${theme.fg("dim", `${queued} queued`)}`) : undefined;
 
@@ -223,6 +229,8 @@ export interface WidgetSource {
   runs(): readonly Run[];
   queued(mode: WidgetMode): number;
   mode(): WidgetMode;
+  /** When the user last sent a message: failed and stopped runs that ended before it are hidden. */
+  dismissedAt?(): number;
   /** Other extensions' sections shown in this panel (pi-bg). */
   sections?(): readonly ActivitySection[];
   /** A row was double-clicked: open its run's conversation, or the section's entry. */
@@ -248,7 +256,7 @@ export class RunsWidget {
 
   private visible(now: number) {
     const mode = this.source.mode();
-    return { runs: widgetRuns(this.source.runs(), mode, now), queued: mode === "off" ? 0 : this.source.queued(mode) };
+    return { runs: widgetRuns(this.source.runs(), mode, now, this.source.dismissedAt?.() ?? 0), queued: mode === "off" ? 0 : this.source.queued(mode) };
   }
 
   private sections(): readonly ActivitySection[] {

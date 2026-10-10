@@ -205,10 +205,13 @@ export default function subagents(pi: ExtensionAPI) {
   const sections = new Map<string, ActivitySection>();
   let hosting = false;
   const hostedSections = () => [...sections.values()];
+  /** When the user last sent a message: failed and stopped runs that ended before it leave the views. */
+  let dismissedAt = 0;
   const widget = new RunsWidget({
     runs: () => [...runs.values()],
     queued: (mode) => queued.async + (mode === "all" ? queued.sync : 0),
     mode: widgetMode,
+    dismissedAt: () => dismissedAt,
     sections: hostedSections,
     open: (target) => {
       const ui = boundUI;
@@ -236,6 +239,13 @@ export default function subagents(pi: ExtensionAPI) {
     enabled: () => config.fleetView !== false,
     actions: (run) => viewerActions(run, boundUI ?? { notify: () => undefined }),
     sections: hostedSections,
+    dismissedAt: () => dismissedAt,
+  });
+  // The user's next message dismisses failures and stops they have had a chance to see.
+  pi.on("input", (event) => {
+    if ((event as { source?: string }).source !== "interactive") return;
+    dismissedAt = Date.now();
+    refreshUI();
   });
   /** Show a section offered to us, if we host (an interactive session with the widget on). */
   const accept = (section: ActivitySection) => {

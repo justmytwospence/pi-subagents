@@ -20,7 +20,7 @@ const FLEET_KEY = "subagents-fleet";
 /** Subagent rows shown at once; the rest scroll. */
 const MAX_ROWS = 5;
 const TICK_MS = 250;
-/** How long a finished run stays in the list. */
+/** How long a run that succeeded stays in the list; a failed or stopped one stays until the user's next message. */
 export const FLEET_LINGER_MS = 5_000;
 
 export type FleetEntry = { kind: "main" } | { kind: "run"; run: Run } | { kind: "ext"; section: ActivitySection; entry: ActivityEntry };
@@ -31,9 +31,14 @@ const entryKey = (e: FleetEntry) => (e.kind === "run" ? `run:${e.run.id}` : e.ki
  * `main`, then the runs worth listing, earliest first: running, being viewed, or just finished;
  * then each section's entries (the section decides which), earliest first.
  */
-export function fleetRoster(runs: readonly Run[], now: number, viewing?: string, sections: readonly ActivitySection[] = []): FleetEntry[] {
+export function fleetRoster(runs: readonly Run[], now: number, viewing?: string, sections: readonly ActivitySection[] = [], dismissedAt = Number.POSITIVE_INFINITY): FleetEntry[] {
+  const ended = (r: Run) => {
+    const at = r.state.endedAt;
+    if (at === undefined) return false;
+    return r.state.status === "done" ? now - at < FLEET_LINGER_MS : now - at < FLEET_LINGER_MS || at > dismissedAt;
+  };
   const listed = runs
-    .filter((r) => r.state.status === "running" || `run:${r.id}` === viewing || (r.state.endedAt !== undefined && now - r.state.endedAt < FLEET_LINGER_MS))
+    .filter((r) => r.state.status === "running" || `run:${r.id}` === viewing || ended(r))
     .sort((a, b) => a.state.startedAt - b.state.startedAt);
   const ext = sections.flatMap((section) =>
     section
@@ -118,6 +123,8 @@ export interface FleetSource {
   actions(run: Run): ViewerActions;
   /** Other extensions' sections whose entries are listed after the runs (pi-bg). */
   sections?(): readonly ActivitySection[];
+  /** When the user last sent a message: failed and stopped runs that ended before it leave the list. */
+  dismissedAt?(): number;
 }
 
 type KeyResult = { consume?: boolean; data?: string } | undefined;
@@ -146,7 +153,7 @@ export class FleetView {
   }
 
   private roster() {
-    return fleetRoster(this.source.runs(), Date.now(), this.viewing, this.source.sections?.() ?? []);
+    return fleetRoster(this.source.runs(), Date.now(), this.viewing, this.source.sections?.() ?? [], this.source.dismissedAt?.());
   }
 
   update(): void {

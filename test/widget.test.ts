@@ -8,7 +8,7 @@ afterEach(() => vi.useRealTimers());
 
 const usage = () => ({ ...emptyUsage(), input: 10_000, output: 2_000, cacheWrite: 300, cacheRead: 90_000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.0123 } });
 
-test("background mode shows only async runs; finished runs linger, failures longer", () => {
+test("background mode shows only async runs; successes linger briefly, failures until the next message", () => {
   const now = 100_000;
   const running = fakeRun();
   const sync = fakeRun({ async: false });
@@ -16,9 +16,12 @@ test("background mode shows only async runs; finished runs linger, failures long
   const doneLong = fakeRun({ state: { status: "done", endedAt: now - LINGER_MS.done } });
   const failed = fakeRun({ state: { status: "failed", endedAt: now - LINGER_MS.done - 1 } });
   const all = [running, sync, done, doneLong, failed];
-  expect(widgetRuns(all, "background", now)).toEqual([running, done, failed]);
-  expect(widgetRuns(all, "all", now)).toEqual([running, sync, done, failed]);
-  expect(widgetRuns(all, "off", now)).toEqual([]);
+  expect(widgetRuns(all, "background", now, 0)).toEqual([running, done, failed]);
+  expect(widgetRuns(all, "all", now, 0)).toEqual([running, sync, done, failed]);
+  expect(widgetRuns(all, "off", now, 0)).toEqual([]);
+  // A failure stays until the user's next message after it ended.
+  expect(widgetRuns([failed], "background", now + 3_600_000, now - LINGER_MS.done - 2)).toEqual([failed]);
+  expect(widgetRuns([failed], "background", now, now)).toEqual([]);
 });
 
 test("a running row: spinner, agent, Jev marks, model, effort, stats; activity beneath", () => {
@@ -43,8 +46,8 @@ test("finished rows show a status icon; the queue gets a row; nothing to show is
     "● Subagents  2 queued",
     "├─ ◦ 2 queued",
     "├─ ✓ reviewer  Find where the config is loaded · ↻5 · 52s",
-    "├─ ✗ worker  Find where the config is loaded · 3s failed: pi exited (1)",
-    "└─ ■ scout  Find where the config is loaded · ↻0/10 · 1s stopped",
+    // Failures and stops share one row: the latest, with a count of the rest.
+    "└─ ✗ worker  Find where the config is loaded · 3s failed: pi exited (1) · +1 more ended",
     "",
   ]);
   expect(renderWidget({ runs: [ok], queued: 0, now: 60_000, frame: 0, width: 200, theme: plain })[0]).toBe("○ Subagents");
