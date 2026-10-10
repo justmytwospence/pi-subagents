@@ -36,7 +36,9 @@ test("the viewer frames the header, the conversation and the live activity", () 
   const { v, run } = viewer();
   run.conversation.apply({ type: "tool_execution_start", toolCallId: "u", toolName: "read", args: { path: "src/config.ts" } });
   const lines = v.render(80);
-  expect(lines).toHaveLength(32);
+  // The whole screen (40 rows), under a banner that says it is not the main session.
+  expect(lines).toHaveLength(40);
+  expect(lines[0]).toContain("◀ esc · Subagent scout · not your main session");
   expect(lines.every((l) => visibleWidth(l) === 80)).toBe(true);
   const out = text(lines);
   expect(out).toContain("│ ● scout  Find where the config is loaded · ↻1 · 0s");
@@ -44,7 +46,7 @@ test("the viewer frames the header, the conversation and the live activity", () 
   expect(out).toMatch(/\[User\][^]*Find where the config is loaded[^]*\[Assistant\][^]*Looking with rg\.[^]*▸ bash: rg loadConfig[^]*\[Result: bash\][^]*src\/config\.ts:8/u);
   expect(out).toContain("▍ read: src/config.ts");
   expect(out).toContain("Enter steer · x stop");
-  expect(out).toContain("Esc close");
+  expect(out).toContain("esc back");
   v.dispose();
 });
 
@@ -61,7 +63,7 @@ test("it follows new output until scrolled up, and again from the end", () => {
   v.dispose();
 });
 
-test("Enter steers through a composer; x twice stops; Esc closes", () => {
+test("Enter steers through a composer; x twice stops; esc backs", () => {
   const { v, calls, tui } = viewer();
   v.render(80);
   v.handleInput(KEY.enter);
@@ -141,7 +143,7 @@ test("openViewer shows an overlay that re-renders on new messages and resolves o
   const ui = fakeUI();
   const run = liveRun();
   const closed = openViewer(ui, run);
-  expect(ui.customs[0]?.options).toMatchObject({ overlay: true, overlayOptions: { width: "90%", maxHeight: "80%" } });
+  expect(ui.customs[0]?.options).toMatchObject({ overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" } });
   const before = ui.tui.renders;
   run.conversation.apply({ type: "message_start", message: { role: "assistant", content: [] } });
   expect(ui.tui.renders).toBe(before + 1);

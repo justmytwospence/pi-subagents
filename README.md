@@ -48,7 +48,8 @@ in Claude Code (2.1.296):
   message another extension sends does not count), or `x` dismisses it.
   A run whose conversation is open stays until you close it. Selection and stop-arming follow the
   row, not its position, so rows coming and going never move them onto another run.
-- **Conversation viewer** (an overlay): the child's conversation as it streams, with tool calls,
+- **Conversation viewer**, full screen under an accent-colored banner (`◀ esc · Subagent scout ·
+  not your main session`), as in Claude Code and Codex: the child's conversation as it streams, with tool calls,
   results, live tool output, queued steering messages and current activity. It follows new output
   until you scroll up (`↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`). `Enter` opens a composer that steers
   the child, `x` twice stops it, `b` moves a foreground run to the background, `m` cycles Markdown rendering (assistant text, tool results too,

@@ -1,4 +1,4 @@
-// A live, auto-scrolling view of one subagent's conversation, as an overlay. Enter opens a composer
+// A live, auto-scrolling view of one subagent's conversation, full screen under a banner. Enter opens a composer
 // that steers the child; `x` twice stops it; `b` moves a foreground run to the background; `m` cycles what renders as Markdown; Esc (or q)
 // closes. It stays open when the run ends.
 // Adapted from tintinweb/pi-subagents (MIT): https://github.com/tintinweb/pi-subagents
@@ -8,8 +8,8 @@ import { type Message, describeActivity, describeTool, messageText } from "../co
 import type { Run } from "../run.ts";
 import { type Theme, dimAll, jev, modelAndEffort, runStats, statusIcon, taskLine } from "./format.ts";
 
-/** Share of the terminal height the overlay may take. */
-export const VIEWER_HEIGHT_PCT = 80;
+/** Share of the terminal height the view takes: all of it, like Claude Code's and Codex's subagent views. */
+export const VIEWER_HEIGHT_PCT = 100;
 /** Border, header, invocation line, two separators, footer, border. */
 const CHROME_LINES = 7;
 const MIN_VIEWPORT = 3;
@@ -206,12 +206,14 @@ export class ConversationViewer implements Component {
     const th = this.theme;
     const inner = width - 4;
     this.width = inner;
-    const row = (content: string) => `${th.fg("border", "│")} ${truncateToWidth(content, inner, "…", true)} ${th.fg("border", "│")}`;
+    const row = (content: string) => `${th.fg("accent", "│")} ${truncateToWidth(content, inner, "…", true)} ${th.fg("accent", "│")}`;
     const rule = row(th.fg("dim", "─".repeat(inner)));
     const run = this.run;
     const s = run.state;
 
-    const lines = [th.fg("border", `╭${"─".repeat(width - 2)}╮`)];
+    // A banner in the accent color says this is not the main session, and how to get back.
+    const label = ` ◀ esc · Subagent ${run.agent} · not your main session `;
+    const lines = [th.fg("accent", `╭─${th.bold(truncateToWidth(label, Math.max(4, width - 3)))}${"─".repeat(Math.max(0, width - 3 - visibleWidth(label)))}╮`)];
     lines.push(row(`${statusIcon(s.status, th)} ${th.bold(run.agent)}${jev(run.byJev.agent, th)}  ${th.fg("muted", taskLine(run.task, 80))} ${th.fg("dim", "·")} ${th.fg("dim", runStats(run))}`));
     const status = s.status === "running" ? "" : ` · ${s.status}`;
     lines.push(row(dimAll(`  ↳ ${modelAndEffort(run, th, true)} · ${run.async ? "async" : "sync"} · ${run.id}${status}`, th)));
@@ -236,13 +238,13 @@ export class ConversationViewer implements Component {
       const position = content.length <= page ? "all" : `${Math.round(((start + page) / content.length) * 100)}%`;
       actions.push(th.fg("dim", `m ${MARKDOWN_LABELS[ConversationViewer.markdownMode]}`));
       const sep = th.fg("dim", " · ");
-      const nav = th.fg("dim", "↑↓ scroll · PgUp/PgDn · Esc close");
+      const nav = th.fg("dim", "↑↓ scroll · PgUp/PgDn · esc back");
       // The line count goes first when the footer is short of room.
       const withCount = [...actions, th.fg("dim", `${content.length} lines · ${position}`)].join(sep);
       const left = visibleWidth(withCount) + visibleWidth(nav) + 1 <= inner ? withCount : actions.join(sep);
       lines.push(row(spread(left, nav, inner)));
     }
-    lines.push(th.fg("border", `╰${"─".repeat(width - 2)}╯`));
+    lines.push(th.fg("accent", `╰${"─".repeat(width - 2)}╯`));
     return lines;
   }
 
@@ -356,17 +358,17 @@ function spread(left: string, right: string, width: number): string {
 export interface ViewerUI {
   custom<T>(
     factory: (tui: TUI, theme: any, keybindings: any, done: (result: T) => void) => Component & { dispose?(): void },
-    options?: { overlay?: boolean; overlayOptions?: { anchor?: "center"; width?: `${number}%`; maxHeight?: `${number}%` } },
+    options?: { overlay?: boolean; overlayOptions?: { anchor?: "center" | "top-left"; width?: `${number}%`; maxHeight?: `${number}%` } },
   ): Promise<T>;
 }
 
-/** Show `run`'s conversation over the editor until the user closes it; `onOpen` gets a way to close it. */
+/** Show `run`'s conversation full screen until the user goes back; `onOpen` gets a way to close it. */
 export function openViewer(ui: ViewerUI, run: Run, actions: ViewerActions = {}, onOpen?: (close: () => void) => void): Promise<void> {
   return ui.custom<void>(
     (tui, theme, keybindings, done) => {
       onOpen?.(() => done(undefined));
       return new ConversationViewer(tui, run, theme, () => done(undefined), actions, keybindings);
     },
-    { overlay: true, overlayOptions: { anchor: "center", width: "90%", maxHeight: `${VIEWER_HEIGHT_PCT}%` } },
+    { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: `${VIEWER_HEIGHT_PCT}%` } },
   );
 }
