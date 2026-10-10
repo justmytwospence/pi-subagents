@@ -12,11 +12,12 @@ import { Type } from "typebox";
 import { type AgentDef, discoverAgents } from "./agents.ts";
 import { Child, type ChildState, type DialogAnswer, type DialogRequest, type Usage, addUsage, emptyUsage } from "./child.ts";
 import { agentDir, loadConfig } from "./config.ts";
-import { transcriptWriter } from "./conversation.ts";
+import { Conversation, type Message, readTranscript, transcriptWriter } from "./conversation.ts";
 import { type JevConfig, askJev } from "./jev.ts";
 import { DEFAULT_TIER_DESCRIPTIONS, type Given, type Resolved, type Tier, pickQuestions, readPicks, resolve } from "./pick.ts";
 import { type Run, displayTokens, transcriptPath } from "./run.ts";
 import { clip, recentTexts } from "./transcript.ts";
+import { type ViewerActions, openViewer } from "./ui/viewer.ts";
 import { RunsWidget, WIDGET_MODES, type WidgetMode } from "./ui/widget.ts";
 
 export interface SubagentsConfig extends Record<string, unknown> {
@@ -112,6 +113,40 @@ function view(run: Run, withOutput = false): RunView {
     seconds: Math.round(((s.endedAt ?? Date.now()) - s.startedAt) / 1000),
     ...(s.error ? { error: clip(s.error, 400) } : {}),
     ...(withOutput && s.output ? { output: clip(s.output, 2_000) } : {}),
+  };
+}
+
+/** A run record as saved in the session. */
+type RecordedRun = RunView & { outputPath: string; async: boolean };
+
+/** A run known only from its record: its saved conversation, or else its task and output. */
+export function recordedRun(v: RecordedRun): Run {
+  let messages: Message[] | undefined = readTranscript(transcriptPath(v.outputPath));
+  if (!messages?.length) {
+    let output = v.output ?? "";
+    try {
+      output = readFileSync(v.outputPath, "utf8");
+    } catch {
+      // Only the record is left.
+    }
+    messages = [{ role: "user", content: [{ type: "text", text: v.task }] }, ...(output ? [{ role: "assistant", content: [{ type: "text" as const, text: output }] }] : [])];
+  }
+  const usage = emptyUsage();
+  usage.input = v.tokens ?? 0;
+  usage.cost.total = v.cost ?? 0;
+  return {
+    id: v.id,
+    agent: v.agent,
+    task: v.task,
+    model: v.model,
+    thinking: v.thinking,
+    byJev: v.byJev ?? { agent: false, model: false, thinking: false },
+    cwd: "",
+    async: Boolean(v.async),
+    // A record still "running" belongs to a process that is gone.
+    state: { status: v.status === "running" ? "stopped" : v.status, output: "", usage, turns: v.turns ?? 0, startedAt: 0, endedAt: (v.seconds ?? 0) * 1000, ...(v.error ? { error: v.error } : {}) },
+    conversation: Conversation.from(messages),
+    outputPath: v.outputPath,
   };
 }
 
@@ -496,22 +531,61 @@ export default function subagents(pi: ExtensionAPI) {
     },
   });
 
+  /** This session's runs, newest first: live ones, then those known only from their records (before a reload). */
+  const allRuns = (ctx: ExtensionContext): Array<{ view: RunView; run: () => Run }> => {
+    const latest = new Map<string, RecordedRun>();
+    for (const e of ctx.sessionManager.getBranch() as Array<{ type?: string; customType?: string; data?: RecordedRun }>) {
+      if (e.type === "custom" && e.customType === RUN_ENTRY && e.data && !runs.has(e.data.id)) latest.set(e.data.id, e.data);
+    }
+    return [
+      ...[...latest.values()].map((v) => ({ view: v, run: () => recordedRun(v) })),
+      ...[...runs.values()].map((r) => ({ view: view(r), run: () => r })),
+    ].reverse();
+  };
+
+  const viewerActions = (run: Run, ctx: ExtensionContext): ViewerActions => ({
+    steer: (message) => run.child?.steer(message) ?? false,
+    stop: () => {
+      run.child?.stop();
+      ctx.ui.notify(`Stopping subagent ${run.agent} (${run.id}).`, "info");
+    },
+  });
+
   pi.registerCommand("subagents", {
-    description: "List this session's subagent runs",
-    handler: async (_args, ctx) => {
-      const live = [...runs.values()];
-      const recorded = (ctx.sessionManager.getBranch() as Array<{ type?: string; customType?: string; data?: RunView }>)
-        .filter((e) => e.type === "custom" && e.customType === RUN_ENTRY && e.data && !runs.has(e.data.id))
-        .map((e) => e.data as RunView);
-      const latest = new Map<string, RunView>();
-      for (const v of recorded) latest.set(v.id, v);
-      const rows = [...live.map((r) => view(r)), ...latest.values()];
-      ctx.ui.notify(
-        rows.length
-          ? rows.map((r) => `${r.id}  ${r.status.padEnd(7)} ${r.agent} · ${r.model} · ${r.thinking}  ${clip(r.task.replace(/\s+/gu, " "), 60)}`).join("\n")
-          : "No subagent runs in this session.",
-        "info",
-      );
+    description: "Browse this session's subagent runs and view their conversations (/subagents [id])",
+    handler: async (args, ctx) => {
+      const label = (r: RunView) => `${r.id}  ${r.status.padEnd(7)} ${r.agent} · ${r.model} · ${r.thinking}  ${clip(r.task.replace(/\s+/gu, " "), 60)}`;
+      let list = allRuns(ctx);
+      if (!list.length) {
+        ctx.ui.notify("No subagent runs in this session.", "info");
+        return;
+      }
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify(list.map((e) => label(e.view)).join("\n"), "info");
+        return;
+      }
+      const id = args.trim();
+      if (id) {
+        const matches = list.filter((e) => e.view.id.startsWith(id));
+        const only = matches.length === 1 ? matches[0] : list.find((e) => e.view.id === id);
+        if (!only) {
+          ctx.ui.notify(`No single run matches "${id}".`, "warning");
+          return;
+        }
+        const run = only.run();
+        await openViewer(ctx.ui, run, viewerActions(run, ctx));
+        return;
+      }
+      for (;;) {
+        const width = String(list.length).length;
+        const labels = list.map((e, i) => `${String(i + 1).padStart(width)}. ${label(e.view)}`);
+        const choice = await ctx.ui.select("Subagent runs", labels);
+        const entry = choice === undefined ? undefined : list[labels.indexOf(choice)];
+        if (!entry) return;
+        const run = entry.run();
+        await openViewer(ctx.ui, run, viewerActions(run, ctx));
+        list = allRuns(ctx);
+      }
     },
   });
 }

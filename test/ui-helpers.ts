@@ -30,7 +30,8 @@ export function fakeTui(rows = 40, columns = 100) {
   return tui;
 }
 
-export type Factory = (tui: any, theme: any, keybindings?: any, done?: (v: unknown) => void) => any;
+export type Factory = (tui: any, theme: any) => any;
+export type CustomFactory = (tui: any, theme: any, keybindings: any, done: (v: any) => void) => any;
 
 export function fakeUI(tui = fakeTui()) {
   const widgets = new Map<string, { factory: Factory; component: any; placement?: string }>();
@@ -54,7 +55,7 @@ export function fakeUI(tui = fakeTui()) {
     },
     getEditorText: () => ui.editorText,
     notify: (message: string) => void ui.notes.push(message),
-    custom(factory: Factory, options: any) {
+    custom(factory: CustomFactory, options: any): Promise<any> {
       return new Promise((resolve) => {
         const close = (value?: unknown) => {
           ui.customs.splice(ui.customs.indexOf(entry), 1);
