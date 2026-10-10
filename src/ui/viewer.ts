@@ -1,5 +1,5 @@
 // A live, auto-scrolling view of one subagent's conversation, as an overlay. Enter opens a composer
-// that steers the child; `x` twice stops it; `m` cycles what renders as Markdown; Esc (or q)
+// that steers the child; `x` twice stops it; `b` moves a foreground run to the background; `m` cycles what renders as Markdown; Esc (or q)
 // closes. It stays open when the run ends.
 // Adapted from tintinweb/pi-subagents (MIT): https://github.com/tintinweb/pi-subagents
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
@@ -25,6 +25,9 @@ export interface ViewerActions {
   /** Send a steering message; false when the run can no longer be steered. */
   steer?: (message: string) => boolean;
   stop?: () => void;
+  /** Move a foreground run's tool call to the background, so the main agent can go on. */
+  background?: () => void;
+  canBackground?: () => boolean;
 }
 
 /** Pi's KeybindingsManager, structurally. */
@@ -103,6 +106,10 @@ export class ConversationViewer implements Component {
     return Boolean(this.actions.steer) && this.running() && Boolean(this.run.child);
   }
 
+  private canBackground() {
+    return this.running() && Boolean(this.actions.canBackground?.());
+  }
+
   private canStop() {
     return Boolean(this.actions.stop) && this.running() && Boolean(this.run.child);
   }
@@ -124,6 +131,12 @@ export class ConversationViewer implements Component {
     if (matchesKey(data, "enter") && this.canSteer()) {
       this.stopArmed = false;
       this.openComposer();
+      return;
+    }
+    if (matchesKey(data, "b") && this.canBackground()) {
+      this.stopArmed = false;
+      this.actions.background?.();
+      this.tui.requestRender();
       return;
     }
     if (matchesKey(data, "m")) {
@@ -219,6 +232,7 @@ export class ConversationViewer implements Component {
       const actions: string[] = [];
       if (this.canSteer()) actions.push(th.fg("dim", "Enter steer"));
       if (this.canStop()) actions.push(this.stopArmed ? th.fg("error", "x again to stop") : th.fg("dim", "x stop"));
+      if (this.canBackground()) actions.push(th.fg("dim", "b background"));
       const position = content.length <= page ? "all" : `${Math.round(((start + page) / content.length) * 100)}%`;
       actions.push(th.fg("dim", `m ${MARKDOWN_LABELS[ConversationViewer.markdownMode]}`));
       const sep = th.fg("dim", " · ");

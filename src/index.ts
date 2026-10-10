@@ -189,6 +189,8 @@ export default function subagents(pi: ExtensionAPI) {
   let backgroundCount = 0;
   /** Tasks waiting for a free slot (parallel) or their turn (chain), by sync/async. */
   const queued = { async: 0, sync: 0 };
+  /** For each foreground run: move its whole call to the background. */
+  const detachers = new Map<string, () => void>();
 
   const widgetMode = (): WidgetMode => (WIDGET_MODES.includes(config.widget) ? config.widget : "background");
   const widget = new RunsWidget({
@@ -199,6 +201,8 @@ export default function subagents(pi: ExtensionAPI) {
   /** Steer and stop for the viewer; only a live child takes either. */
   const viewerActions = (run: Run, ui: Pick<ExtensionContext["ui"], "notify">): ViewerActions => ({
     steer: (message) => run.child?.steer(message) ?? false,
+    background: () => detachers.get(run.id)?.(),
+    canBackground: () => detachers.has(run.id),
     stop: () => {
       run.child?.stop();
       ui.notify(`Stopping subagent ${run.agent} (${run.id}).`, "info");
@@ -443,34 +447,42 @@ export default function subagents(pi: ExtensionAPI) {
         return params.worktree ? worktreeFor(base, item.task) : base;
       };
 
-      const runOne = async (item: Item, r: Resolved, isAsync: boolean, dequeue: () => void): Promise<Run> => {
+      /** Whether this call's runs are in the background: from the start (`async`), or once detached. */
+      const call = { async: Boolean(params.async), detach: undefined as (() => void) | undefined };
+
+      const runOne = async (item: Item, r: Resolved, dequeue: () => void): Promise<Run> => {
         const cwd = await cwdFor(item);
         dequeue();
-        const run = startRun(ctx, item, r, { cwd, ...(fork ? { fork } : {}), async: isAsync, onUpdate: update });
+        const run = startRun(ctx, item, r, { cwd, ...(fork ? { fork } : {}), async: call.async, onUpdate: update });
         started.push(run);
         update();
-        const abort = () => run.child?.stop();
-        if (!isAsync) signal?.addEventListener("abort", abort, { once: true });
+        // A foreground run stops with the call, unless it has been moved to the background.
+        const abort = () => {
+          if (!call.async) run.child?.stop();
+        };
+        signal?.addEventListener("abort", abort, { once: true });
+        if (!call.async && call.detach) detachers.set(run.id, call.detach);
         await run.child?.done;
         signal?.removeEventListener("abort", abort);
+        detachers.delete(run.id);
         return run;
       };
 
-      const execute = async (isAsync: boolean): Promise<Run[]> => {
-        const kind = isAsync ? "async" : "sync";
-        let waiting = items.length;
-        queued[kind] += waiting;
+      let waiting = items.length;
+      const kind = () => (call.async ? "async" : "sync");
+      const execute = async (): Promise<Run[]> => {
+        queued[kind()] += waiting;
         const dequeue = () => {
           if (waiting <= 0) return;
           waiting--;
-          queued[kind]--;
+          queued[kind()]--;
         };
         try {
           if (mode === "chain") {
             let previous = "";
             const done: Run[] = [];
             for (const [index, item] of items.entries()) {
-              const run = await runOne({ ...item, task: item.task.replaceAll("{previous}", previous) }, resolved[index] as Resolved, isAsync, dequeue);
+              const run = await runOne({ ...item, task: item.task.replaceAll("{previous}", previous) }, resolved[index] as Resolved, dequeue);
               done.push(run);
               if (run.state.status !== "done") break;
               previous = run.state.output;
@@ -480,47 +492,76 @@ export default function subagents(pi: ExtensionAPI) {
           const queue = items.map((item, index) => ({ item, index }));
           const done: Run[] = new Array(items.length);
           const worker = async () => {
-            for (let next = queue.shift(); next; next = queue.shift()) done[next.index] = await runOne(next.item, resolved[next.index] as Resolved, isAsync, dequeue);
+            for (let next = queue.shift(); next; next = queue.shift()) done[next.index] = await runOne(next.item, resolved[next.index] as Resolved, dequeue);
           };
           await Promise.all(Array.from({ length: Math.min(config.concurrency, items.length) }, worker));
           return done;
         } finally {
           // A chain that stopped early leaves steps that will never run.
-          queued[kind] -= waiting;
+          queued[kind()] -= waiting;
           waiting = 0;
           refreshUI();
         }
       };
 
-      if (params.async) {
+      /** Report `work` as a message when it ends; meanwhile herdr shows background work. */
+      const deliverLater = (work: Promise<Run[]>) => {
         backgroundCount++;
         pi.events.emit("herdr:background", { active: true, label: `subagents (${items.length})` });
-        const deliver = (list: Run[]) => {
-          backgroundCount--;
-          pi.events.emit("herdr:background", { active: false });
-          const text = list.map(resultText).join("\n\n---\n\n");
-          pi.sendMessage(
-            { customType: "subagent-result", content: `Subagent ${mode} finished:\n\n${text}`, display: true, details: { mode, runs: list.map((r) => view(r, true)) } },
-            { triggerTurn: true, deliverAs: "followUp" },
-          );
-        };
-        void execute(true)
-          .then(deliver)
+        void work
+          .then((list) => {
+            backgroundCount--;
+            pi.events.emit("herdr:background", { active: false });
+            const text = list.filter(Boolean).map(resultText).join("\n\n---\n\n");
+            pi.sendMessage(
+              { customType: "subagent-result", content: `Subagent ${mode} finished:\n\n${text}`, display: true, details: { mode, runs: list.filter(Boolean).map((r) => view(r, true)) } },
+              { triggerTurn: true, deliverAs: "followUp" },
+            );
+          })
           .catch((error: unknown) => {
             backgroundCount--;
             pi.events.emit("herdr:background", { active: false });
             pi.sendMessage({ customType: "subagent-result", content: `Subagent ${mode} failed: ${error instanceof Error ? error.message : String(error)}`, display: true }, { triggerTurn: true, deliverAs: "followUp" });
           });
+      };
+
+      const ids = () => started.map((r) => `${r.id} (${r.agent}, ${r.model}, ${r.thinking})`).join(", ");
+
+      if (call.async) {
+        deliverLater(execute());
         // Let the runs start so their ids exist.
         await new Promise((r) => setTimeout(r, 50));
-        const ids = started.map((r) => `${r.id} (${r.agent}, ${r.model}, ${r.thinking})`).join(", ");
         return {
-          content: [{ type: "text", text: `Started ${mode} in the background${ids ? `: ${ids}` : ""}. Results arrive as messages; use action=status, steer, stop, or result with an id meanwhile.` }],
+          content: [{ type: "text", text: `Started ${mode} in the background${started.length ? `: ${ids()}` : ""}. Results arrive as messages; use action=status, steer, stop, or result with an id meanwhile.` }],
           details: details(),
         };
       }
 
-      const done = await execute(false);
+      // In the foreground until the user moves the call to the background (b in FleetView or the viewer).
+      const detached = new Promise<"detached">((resolve) => {
+        call.detach = () => {
+          if (call.async) return;
+          queued.sync -= waiting;
+          queued.async += waiting;
+          call.async = true;
+          for (const r of started) {
+            r.async = true;
+            detachers.delete(r.id);
+          }
+          refreshUI();
+          resolve("detached");
+        };
+      });
+      const work = execute();
+      const done = await Promise.race([work, detached]);
+      if (done === "detached") {
+        deliverLater(work);
+        return {
+          content: [{ type: "text", text: `The user moved this ${mode} to the background: ${ids()}. Results arrive as messages; use action=status, steer, stop, or result with an id meanwhile.` }],
+          details: details(),
+        };
+      }
+      for (const r of started) detachers.delete(r.id);
       const text = mode === "chain" ? resultText(done.at(-1) as Run) : done.map(resultText).join("\n\n---\n\n");
       const allFailed = done.every((r) => r.state.status !== "done");
       return {

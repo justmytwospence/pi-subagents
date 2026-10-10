@@ -96,8 +96,16 @@ export function subagentDepth(env: NodeJS.ProcessEnv = process.env): number {
   return env.PI_SUBAGENT ? 1 : 0;
 }
 
+let invocationOverride: { command: string; args: string[] } | undefined;
+
+/** Run children with another command (tests use a fake Pi); undefined restores the default. */
+export function setPiInvocation(invocation: { command: string; args: string[] } | undefined) {
+  invocationOverride = invocation;
+}
+
 /** How to run the same Pi that is running this extension. */
 export function piInvocation(): { command: string; args: string[] } {
+  if (invocationOverride) return invocationOverride;
   const script = process.argv[1];
   if (script && !script.startsWith("/$bunfs/") && existsSync(script)) return { command: process.execPath, args: [script] };
   const exec = path.basename(process.execPath).toLowerCase();

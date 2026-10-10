@@ -44,13 +44,14 @@ its result arrives. Three views follow the children while they work (in the TUI 
   shows async runs only, since a foreground run already renders in its tool row.
 - **FleetView** (below the editor): `main` and every running subagent, with elapsed time and
   tokens. Press `↓` (or `←`) at an empty prompt to move into it, `↑`/`↓` to select, `Enter` to open
-  the selected run's conversation, `x` twice to stop it, and `Esc` (or `↑` past `main`) to return
-  to the prompt. Finished
+  the selected run's conversation, `x` twice to stop it, `b` to move a foreground run to the
+  background (the tool call returns and the result arrives as a message, like `async`), and `Esc`
+  (or `↑` past `main`) to return to the prompt. Finished
   runs stay 5 seconds; a run whose conversation is open stays until you close it.
 - **Conversation viewer** (an overlay): the child's conversation as it streams, with tool calls,
   results, live tool output, queued steering messages and current activity. It follows new output
   until you scroll up (`↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End`). `Enter` opens a composer that steers
-  the child, `x` twice stops it, `m` cycles Markdown rendering (assistant text, tool results too,
+  the child, `x` twice stops it, `b` moves a foreground run to the background, `m` cycles Markdown rendering (assistant text, tool results too,
   or none), and `Esc` or `q` closes the viewer. It stays open when the run ends.
 
 `/subagents` lists this session's runs, live or recorded, and opens the one you pick in the viewer;

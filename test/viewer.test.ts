@@ -86,6 +86,20 @@ test("Enter steers through a composer; x twice stops; Esc closes", () => {
   v.dispose();
 });
 
+test("b moves a foreground run to the background, when offered", () => {
+  let moved = 0;
+  let offered = true;
+  const v = new ConversationViewer(fakeTui(), liveRun(), plain, () => undefined, { background: () => void moved++, canBackground: () => offered });
+  expect(text(v.render(120))).toContain("b background");
+  v.handleInput("b");
+  expect(moved).toBe(1);
+  offered = false;
+  expect(text(v.render(120))).not.toContain("b background");
+  v.handleInput("b");
+  expect(moved).toBe(1);
+  v.dispose();
+});
+
 test("m cycles Markdown: assistant text, then tool results too, then nothing", () => {
   const { v, run } = viewer();
   run.conversation.apply({ type: "message_end", message: { role: "toolResult", toolName: "read", content: [{ type: "text", text: "# Heading" }] } });

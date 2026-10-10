@@ -1,6 +1,7 @@
 // FleetView: a Claude Code-style list of `main` and the running subagents below the editor. ↓ or
 // ← at an empty prompt moves into it; ↑/↓ select; Enter opens the selected run's conversation
-// viewer (Esc there comes back here); x twice stops the selected run; Esc, or ↑ past `main`,
+// viewer (Esc there comes back here); x twice stops the selected run, b moves a foreground run to
+// the background; Esc, or ↑ past `main`,
 // returns to the prompt. Finished runs
 // stay a few seconds, and a run whose viewer is open stays until it closes.
 // Keys go through `onTerminalInput`, which sees them before the editor and can consume them, so
@@ -36,12 +37,14 @@ export interface FleetFrame {
   active: boolean;
   /** The selected run is one `x` away from being stopped. */
   stopArmed?: boolean;
+  /** The selected run is in the foreground and can be moved to the background. */
+  canBackground?: boolean;
   now: number;
   width: number;
   theme: Theme;
 }
 
-export function renderFleet({ roster, selected, active, stopArmed, now, width, theme }: FleetFrame): string[] {
+export function renderFleet({ roster, selected, active, stopArmed, canBackground, now, width, theme }: FleetFrame): string[] {
   const rows = roster.slice(1).flatMap((e) => (e.kind === "run" ? [e.run] : []));
   if (!rows.length) return [];
   const sel = Math.min(selected, rows.length);
@@ -52,7 +55,7 @@ export function renderFleet({ roster, selected, active, stopArmed, now, width, t
     ? theme.fg("dim", "↓ or ← for subagents")
     : stopArmed && stoppable
       ? theme.fg("error", `x again to stop ${chosen.agent}`)
-      : theme.fg("dim", `↑↓ select · enter view${stoppable ? " · x stop" : ""} · esc back`);
+      : theme.fg("dim", `↑↓ select · enter view${stoppable ? " · x stop" : ""}${stoppable && canBackground ? " · b background" : ""} · esc back`);
   const lines = [truncateToWidth(`  ${hint}`, width), "", truncateToWidth(`  ${bullet(0)} ${sel === 0 ? theme.fg("text", "main") : "main"}`, width)];
   const visible = Math.min(MAX_ROWS, rows.length);
   const selRow = Math.max(0, sel - 1);
@@ -146,7 +149,12 @@ export class FleetView {
       (tui, factoryTheme: Theme) => {
         this.tui = tui;
         return {
-          render: (width: number) => renderFleet({ roster: this.roster(), selected: this.selected, active: this.active, stopArmed: this.stopArmed, now: Date.now(), width, theme: ui.theme ?? factoryTheme }),
+          render: (width: number) => {
+            const roster = this.roster();
+            const entry = roster[this.selected];
+            const canBackground = entry?.kind === "run" && Boolean(this.source.actions(entry.run).canBackground?.());
+            return renderFleet({ roster, selected: this.selected, active: this.active, stopArmed: this.stopArmed, canBackground, now: Date.now(), width, theme: ui.theme ?? factoryTheme });
+          },
           invalidate: () => undefined,
         };
       },
@@ -182,6 +190,8 @@ export class FleetView {
       // Two presses, so a stray x cannot kill a run.
       if (armed) this.source.actions(entry.run).stop?.();
       else this.stopArmed = true;
+    } else if (matchesKey(data, "b") && entry?.kind === "run" && this.source.actions(entry.run).canBackground?.()) {
+      this.source.actions(entry.run).background?.();
     } else if (matchesKey(data, "down")) {
       this.selected = Math.min(roster.length - 1, this.selected + 1);
     } else if (matchesKey(data, "up")) {

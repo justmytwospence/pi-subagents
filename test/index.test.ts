@@ -75,3 +75,57 @@ test("at the deepest allowed level a subagent gets no subagent tool", () => {
   expect(registered("1")).toEqual(["subagent"]);
   expect(registered("2")).toEqual([]);
 });
+
+test("b in FleetView moves a foreground call to the background; its result arrives as a message", async () => {
+  const { setPiInvocation } = await import("../src/child.ts");
+  setPiInvocation({ command: process.execPath, args: [path.join(import.meta.dirname, "fixtures", "fake-pi-loop.mjs")] });
+  try {
+    const h = harness();
+    let tool: any;
+    h.pi.registerTool = (t: unknown) => void (tool = t);
+    subagents(h.pi);
+    const ui = fakeUI();
+    const cwd = mkdtempSync(path.join(tmpdir(), "subagents-cwd-"));
+    const ctx = h.ctx({ ui, cwd, model: { provider: "p", id: "m" } });
+    await h.emit("session_start", { type: "session_start" }, ctx);
+    const call = tool.execute("t1", { task: "loop forever" }, undefined, undefined, ctx);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(ui.press("\x1b[B")).toBe(true);
+    expect(ui.render("subagents-fleet")[0]).toContain("b background");
+    expect(ui.widgets.has("subagents")).toBe(false);
+    expect(ui.press("b")).toBe(true);
+    const result = await call;
+    expect(result.content[0].text).toMatch(/^The user moved this single to the background: \w+ \(general, p\/m, high\)/u);
+    // Now a background run: the widget shows it, and b is no longer offered.
+    expect(ui.widgets.has("subagents")).toBe(true);
+    expect(ui.render("subagents-fleet")[0]).not.toContain("b background");
+    expect(h.messages).toHaveLength(0);
+    await h.commands.get("subagents").handler("stop all", ctx);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(h.messages[0]?.message.content).toMatch(/^Subagent single finished:\n\n\[general · p\/m · high · stopped\]/u);
+    await h.emit("session_shutdown", { type: "session_shutdown" }, ctx);
+  } finally {
+    setPiInvocation(undefined);
+  }
+});
+
+test("a foreground call returns the child's answer and usage, and offers no detach after", async () => {
+  const { setPiInvocation } = await import("../src/child.ts");
+  setPiInvocation({ command: process.execPath, args: [path.join(import.meta.dirname, "fixtures", "fake-pi.mjs")] });
+  try {
+    const h = harness();
+    let tool: any;
+    h.pi.registerTool = (t: unknown) => void (tool = t);
+    subagents(h.pi);
+    const ui = fakeUI();
+    const ctx = h.ctx({ ui, cwd: mkdtempSync(path.join(tmpdir(), "subagents-cwd-")), model: { provider: "p", id: "m" } });
+    await h.emit("session_start", { type: "session_start" }, ctx);
+    const result = await tool.execute("t1", { task: "count" }, undefined, undefined, ctx);
+    expect(result.content[0].text).toMatch(/^\[general · anthropic\/fake · high · done\]\ntask=count answer=cancelled/u);
+    expect(result.usage.cost.total).toBeCloseTo(0.03);
+    expect(ui.selects[0]?.title).toBe("[subagent general] Allow?");
+    await h.emit("session_shutdown", { type: "session_shutdown" }, ctx);
+  } finally {
+    setPiInvocation(undefined);
+  }
+});
