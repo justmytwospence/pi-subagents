@@ -242,7 +242,8 @@ export class Child {
         else if (event.command === "prompt" && event.data?.disposition === "handled") this.finishAndClose("done");
         break;
       case "agent_settled":
-        this.finishAndClose(this.state.error && !this.state.output ? "failed" : "done");
+        // After stop(), Pi settles the aborted run before it exits.
+        this.finishAndClose(this.stopping ? "stopped" : this.state.error && !this.state.output ? "failed" : "done");
         break;
       case "extension_ui_request":
         void this.answerDialog(event);

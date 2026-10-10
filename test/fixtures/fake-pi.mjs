@@ -23,6 +23,8 @@ rl.on("line", (line) => {
     out({ type: "tool_execution_start", toolCallId: "c1", toolName: "bash", args: { command: "npm test" } });
     out({ type: "extension_ui_request", id: "d1", method: "select", title: "Allow?", options: ["Allow once", "Block"] });
     globalThis.task = cmd.message;
+  } else if (cmd.type === "abort") {
+    out({ type: "agent_settled", aborted: true });
   } else if (cmd.type === "steer") {
     steered = cmd.message;
   } else if (cmd.type === "extension_ui_response") {

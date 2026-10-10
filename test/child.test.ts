@@ -71,3 +71,12 @@ test("subagentDepth: the explicit depth, else 1 inside a subagent, else 0", () =
   expect(subagentDepth({ PI_SUBAGENT: "1", PI_SUBAGENT_DEPTH: "2" })).toBe(2);
   expect(subagentDepth({ PI_SUBAGENT_DEPTH: "nope" })).toBe(0);
 });
+
+test("a stopped child reports stopped, even when Pi settles the aborted run first", async () => {
+  let asked!: () => void;
+  const dialog = new Promise<void>((resolve) => (asked = resolve));
+  const child = new Child({ task: "t", cwd: process.cwd(), model: "m", thinking: "low", sessionDir: "/tmp", invocation: fake, onDialog: () => (asked(), new Promise(() => undefined)) }).start();
+  await dialog;
+  child.stop();
+  expect((await child.done).status).toBe("stopped");
+});
