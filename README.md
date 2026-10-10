@@ -44,7 +44,8 @@ in Claude Code (2.1.296):
   foreground run to the background (the tool call returns and the result arrives as a message,
   like `async`), and `Esc` (or `↑` past `main`) to return to the prompt. As in Claude Code, a run
   that succeeds leaves at once and a dim `/subagents to see subagents` (`/tasks ...` with pi-bg)
-  shows for 30 seconds; a failed or stopped run stays until your next message, or `x` dismisses it.
+  shows for 30 seconds; a failed or stopped run stays until your next message (one you type: a
+  message another extension sends does not count), or `x` dismisses it.
   A run whose conversation is open stays until you close it. Selection and stop-arming follow the
   row, not its position, so rows coming and going never move them onto another run.
 - **Conversation viewer** (an overlay): the child's conversation as it streams, with tool calls,
